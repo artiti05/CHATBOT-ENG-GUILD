@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+myenv/
+.venv/
+
+# Output artifacts (generated per-run, don't commit)
+ocr_results/
+output/
+outputs/
+*.png
+!examples/*.png
+
+# OS junk
+.DS_Store
+Thumbs.db
