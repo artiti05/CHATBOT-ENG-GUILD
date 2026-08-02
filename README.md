@@ -88,14 +88,16 @@ python batch_ingest.py --no-reset-db
 
 ### 2. Running the RAG Chatbot Web Application (`app.py`)
 
-Launch the web application using Uvicorn:
+Launch the web application directly (defaults to standard web port **8080**):
 
 ```bash
-python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+python app.py
 ```
+*(Or via Uvicorn explicitly: `python -m uvicorn app:app --host 0.0.0.0 --port 8080`)*
 
 Open your browser and navigate to:
-👉 **`http://localhost:8000`**
+👉 **`http://localhost:8080`** (or `http://<SERVER_IP>:8080`)
+
 
 ---
 

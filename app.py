@@ -673,3 +673,10 @@ HTML_CONTENT = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+if __name__ == "__main__":
+    import uvicorn
+    print("\n🚀 Starting Guild Knowledge Base RAG Chatbot Server on http://0.0.0.0:8080 ...")
+    uvicorn.run("app:app", host="0.0.0.0", port=8080, reload=True)
+
+
