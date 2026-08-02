@@ -676,7 +676,23 @@ HTML_CONTENT = """<!DOCTYPE html>
 
 if __name__ == "__main__":
     import uvicorn
-    print("\n🚀 Starting Guild Knowledge Base RAG Chatbot Server on http://0.0.0.0:8080 ...")
-    uvicorn.run("app:app", host="0.0.0.0", port=8080, reload=True)
+    import socket
+    import os
+
+    def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex((host, port)) == 0
+
+    target_port = int(os.getenv("PORT", "8080"))
+    if is_port_in_use(target_port):
+        for alt_port in [8000, 8501, 5000, 8081]:
+            if not is_port_in_use(alt_port):
+                print(f"ℹ️ Port {target_port} is currently occupied by another application. Falling back to port {alt_port}.")
+                target_port = alt_port
+                break
+
+    print(f"\n🚀 Starting Guild Knowledge Base RAG Chatbot Server on http://0.0.0.0:{target_port} ...")
+    uvicorn.run("app:app", host="0.0.0.0", port=target_port, reload=True)
+
 
 
