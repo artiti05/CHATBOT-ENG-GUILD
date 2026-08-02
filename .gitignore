@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# Local Storage, Vector DB & Caches
+storage/chroma_db/
+storage/registry.db
+storage/crawler_cache/
+*.log
+
+# IDE & OS generated files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
