@@ -66,35 +66,45 @@ ollama serve
 
 ---
 
-## 🚀 How to Run
+## 🚀 How to Run (Generic Dual-Device CLI Interface `main.py`)
 
-### 1. Batch Ingestion & Vector Database Management (`batch_ingest.py`)
+The unified CLI entry point `main.py` allows running both ingestion (on an Ubuntu parsing device) and chatbot testing/serving (on a local device) seamlessly.
 
-The `batch_ingest.py` script manages database initialization, indexing pre-parsed Markdown files, and batch processing remaining PDFs on GPU.
-
-```bash
-# Mode A: Preview execution plan without modifying DB or VLM
-python batch_ingest.py --dry-run
-
-# Mode B: Reset VDB & index pre-parsed output_dir Markdown files NOW (No VLM calls)
-python batch_ingest.py --index-only
-
-# Mode C: Full Pipeline (Reset VDB -> Index pre-parsed files -> GPU parse remaining PDFs)
-python batch_ingest.py
-
-# Mode D: Append-only mode (Parse remaining PDFs without resetting existing VDB)
-python batch_ingest.py --no-reset-db
-```
-
-### 2. Running the RAG Chatbot Web Application (`app.py`)
-
-Launch the web application directly (defaults to standard web port **8080**):
+### 1. Ingestion Mode (For Ubuntu Parsing & Storage Device)
+Run full PDF vision parsing, token chunking, BGE-M3 embedding, and Chroma vector database storage for files in `pdfs/`:
 
 ```bash
-python app.py
-```
-*(Or via Uvicorn explicitly: `python -m uvicorn app:app --host 0.0.0.0 --port 8080`)*
+# Preview ingestion plan without modifying DB or calling VLM (Dry-Run)
+python main.py ingest --dry-run
 
+# Run full batch ingestion (Reset DB -> Index pre-parsed files -> GPU parse remaining PDFs in pdfs/)
+python main.py ingest
+
+# Index pre-parsed Markdown files in output_dir only (No VLM calls)
+python main.py ingest --index-only
+
+# Parse remaining PDFs without resetting existing VDB
+python main.py ingest --no-reset-db
+```
+
+### 2. Interactive Chatbot Testing Mode (Terminal)
+Test chatbot response generation and vector DB retrieval interactively directly in your terminal:
+
+```bash
+# Interactive terminal QA session against stored VDB
+python main.py test
+
+# Single question test query
+python main.py query "ما هي شروط تسجيل المهندسين الأردنيين في النقابة؟"
+```
+
+### 3. Web Chatbot Application Mode
+Launch the web interface and FastAPI server (defaults to port **8080**):
+
+```bash
+python main.py serve
+# Or run direct app: python app.py
+```
 Open your browser and navigate to:
 👉 **`http://localhost:8080`** (or `http://<SERVER_IP>:8080`)
 

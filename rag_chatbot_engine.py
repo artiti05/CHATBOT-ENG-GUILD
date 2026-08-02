@@ -13,7 +13,8 @@ except ImportError:
 
 from config.settings import (
     CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME, BGE_RERANKER_MODEL_NAME,
-    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_VISION_MODEL
+    LLM_PROVIDER, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, OLLAMA_BASE_URL,
+    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL
 )
 from ingestion_pipeline import BGEM3Embedder
 
@@ -111,8 +112,11 @@ class KnowledgeRetriever:
 class RAGChatbot:
     def __init__(self):
         self.retriever = KnowledgeRetriever()
+        self.provider = LLM_PROVIDER.lower()
+        self.ollama_url = OLLAMA_URL
+        self.ollama_model = OLLAMA_CHAT_MODEL
         self.lmstudio_url = f"{LMSTUDIO_BASE_URL.rstrip('/')}/chat/completions"
-        self.model_name = LMSTUDIO_CHAT_MODEL
+        self.lmstudio_model = LMSTUDIO_CHAT_MODEL
 
     def detect_and_normalize_query(self, query: str) -> Tuple[str, str]:
         q = query.strip()
@@ -201,50 +205,54 @@ class RAGChatbot:
         generated_answer = ""
         llm_success = False
 
-        try:
-            payload = {
-                "model": self.model_name,
-                "messages": [{"role": "user", "content": full_prompt}],
-                "temperature": 0.3,
-                "max_tokens": 1500
-            }
-            res = requests.post(self.lmstudio_url, json=payload, timeout=15)
-            if res.status_code == 200:
-                choices = res.json().get("choices", [])
-                if choices:
-                    content = choices[0].get("message", {}).get("content", "")
-                    if content:
-                        generated_answer = content.strip()
-                        llm_success = True
-        except Exception as err:
-            print(f"[RAG Chatbot Warning] LM Studio call failed ({type(err).__name__}). Trying Ollama fallback...")
-
-        # Fallback to Ollama API if LM Studio call did not succeed
-        if not llm_success:
-            try:
-                ollama_payload = {
-                    "model": OLLAMA_VISION_MODEL,
-                    "prompt": full_prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.3,
-                        "num_predict": 1500,
+        # Direct Ollama call (Primary Default)
+        if self.provider == "ollama" or not llm_success:
+            for model_to_try in [self.ollama_model, OLLAMA_VISION_MODEL]:
+                try:
+                    ollama_payload = {
+                        "model": model_to_try,
+                        "prompt": full_prompt,
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.3,
+                            "num_predict": 1500,
+                        }
                     }
+                    res = requests.post(self.ollama_url, json=ollama_payload, timeout=60)
+                    if res.status_code == 200:
+                        data = res.json()
+                        content = data.get("response", "").strip()
+                        if content:
+                            generated_answer = content
+                            llm_success = True
+                            break
+                except Exception as o_err:
+                    print(f"[RAG Chatbot Warning] Ollama call ({model_to_try}) failed: {o_err}")
+
+        # Secondary fallback if LM Studio is explicitly requested
+        if not llm_success and self.provider == "lmstudio":
+            try:
+                payload = {
+                    "model": self.lmstudio_model,
+                    "messages": [{"role": "user", "content": full_prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 1500
                 }
-                res = requests.post(OLLAMA_URL, json=ollama_payload, timeout=60)
+                res = requests.post(self.lmstudio_url, json=payload, timeout=15)
                 if res.status_code == 200:
-                    data = res.json()
-                    content = data.get("response", "").strip()
-                    if content:
-                        generated_answer = content
-                        llm_success = True
-            except Exception as o_err:
-                print(f"[RAG Chatbot Warning] Ollama fallback failed: {o_err}")
+                    choices = res.json().get("choices", [])
+                    if choices:
+                        content = choices[0].get("message", {}).get("content", "")
+                        if content:
+                            generated_answer = content.strip()
+                            llm_success = True
+            except Exception as err:
+                print(f"[RAG Chatbot Warning] LM Studio call failed ({type(err).__name__}).")
 
         if not llm_success:
             generated_answer = (
-                "تم استخراج أهم 10 مصادر ذات صلة بسؤالك من قاعدة المعرفة. "
-                "(ملاحظة: خوادم التوليد المحلية LM Studio و Ollama غير متصلة حالياً للتوليد المباشر، يمكنك الاطلاع على المصادر أدناه):"
+                "تم استخراج أهم المصادر ذات صلة بسؤالك من قاعدة المعرفة. "
+                "(ملاحظة: خادم التوليد Ollama غير متصل حالياً للتوليد المباشر، يمكنك الاطلاع على المصادر أدناه):"
             )
 
         return {
@@ -256,3 +264,4 @@ class RAGChatbot:
             "llm_connected": llm_success,
             "time_taken": round(time.time() - start_time, 2)
         }
+

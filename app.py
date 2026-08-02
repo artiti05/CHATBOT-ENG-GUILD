@@ -693,6 +693,3 @@ if __name__ == "__main__":
 
     print(f"\n🚀 Starting Guild Knowledge Base RAG Chatbot Server on http://0.0.0.0:{target_port} ...")
     uvicorn.run("app:app", host="0.0.0.0", port=target_port, reload=True)
-
-
-

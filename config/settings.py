@@ -36,9 +36,12 @@ CHUNK_OVERLAP_TOKENS = 50
 CRAWL_CACHE_DIR = STORAGE_DIR / "crawler_cache"
 CRAWL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Multi-Stage Ingestion Pipeline, Vision PDF Parser & LM Studio / Ollama Settings
+# Multi-Stage Ingestion Pipeline & Ollama Settings
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # "ollama" or "lmstudio"
 VLM_PROVIDER = os.getenv("VLM_PROVIDER", "ollama")  # "ollama" or "lmstudio" or "mock"
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b")
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
 LMSTUDIO_CHAT_MODEL = os.getenv("LMSTUDIO_CHAT_MODEL", "jais-adapted-7b-chat")
