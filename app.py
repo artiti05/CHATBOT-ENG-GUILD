@@ -544,6 +544,15 @@ HTML_CONTENT = """<!DOCTYPE html>
             handleSend(new Event('submit'));
         }
 
+        function getApiKey(forceAsk = false) {
+            let key = localStorage.getItem('rag_api_key');
+            if (!key || forceAsk) {
+                key = prompt('أدخل مفتاح API الخاص بالخدمة (X-API-Key):');
+                if (key) localStorage.setItem('rag_api_key', key.trim());
+            }
+            return key ? key.trim() : '';
+        }
+
         async function handleSend(e) {
             e.preventDefault();
             const inputEl = document.getElementById('user-input');
@@ -568,7 +577,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': getApiKey() },
                     body: JSON.stringify({
                         query: query,
                         history: chatHistory,
@@ -577,6 +586,15 @@ HTML_CONTENT = """<!DOCTYPE html>
                 });
 
                 const data = await response.json();
+                if (response.status === 401) {
+                    removeTypingIndicator(typingId);
+                    localStorage.removeItem('rag_api_key');
+                    appendAssistantMessage({
+                        answer: 'مفتاح API غير صحيح. أعد تحميل الصفحة وأدخل المفتاح الصحيح.',
+                        sources: []
+                    });
+                    return;
+                }
                 removeTypingIndicator(typingId);
 
                 // Update chat history memory
