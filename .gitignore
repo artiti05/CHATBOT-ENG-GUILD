@@ -22,3 +22,4 @@ storage/crawler_cache/
 .idea/
 .DS_Store
 Thumbs.db
+.env

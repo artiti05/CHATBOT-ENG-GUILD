@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
-
+from dotenv import load_dotenv
+load_dotenv()
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEXTS_DIR = BASE_DIR / "texts"
@@ -92,4 +93,4 @@ Arabic tables are read right-to-left, and often have a top-level header cell tha
 multiple sub-columns below it (colspan). Do not flatten these into a single row of numbers.
 Keep the header hierarchy explicit using colspan, and keep column order as it visually
 appears on the page (rightmost visual column = first <td> in each row, since this is RTL).
-"""
+"""
