@@ -64,6 +64,12 @@ async def chat_with_kb(req: ChatRequest, _=Security(verify_key)):
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
 
+    hist_dicts = [{"role": h.role, "content": h.content} for h in req.history] if req.history else []
+    response = chatbot.answer_question(query=req.query, history=hist_dicts, top_k=req.top_k)
+    return response
+
+
+
 @app.get("/api/health")
 async def health():
     try:

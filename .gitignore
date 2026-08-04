@@ -23,3 +23,6 @@ storage/crawler_cache/
 .DS_Store
 Thumbs.db
 .env
+
+query.json
+response.json
