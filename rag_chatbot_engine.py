@@ -16,7 +16,33 @@ from config.settings import (
     LLM_PROVIDER, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, OLLAMA_BASE_URL,
     LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL
 )
-from ingestion_pipeline import BGEM3Embedder
+from ingestion_pipeline import get_embedder, BaseEmbedder
+
+
+def reciprocal_rank_fusion(candidate_lists: List[List[Dict[str, Any]]], k: int = 60) -> List[Dict[str, Any]]:
+    """
+    Combines multiple ranked candidate lists using Reciprocal Rank Fusion (RRF).
+    RRF Score = sum(1 / (k + rank_i))
+    """
+    scores: Dict[str, float] = {}
+    chunk_map: Dict[str, Dict[str, Any]] = {}
+
+    for c_list in candidate_lists:
+        for rank, candidate in enumerate(c_list, start=1):
+            cid = candidate.get("metadata", {}).get("chunk_id") or candidate.get("text", "")[:50]
+            if cid not in chunk_map:
+                chunk_map[cid] = candidate
+            scores[cid] = scores.get(cid, 0.0) + (1.0 / (k + rank))
+
+    sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+    fused_results = []
+    for cid in sorted_ids:
+        item = dict(chunk_map[cid])
+        item["rrf_score"] = scores[cid]
+        fused_results.append(item)
+
+    return fused_results
+
 
 # ---------------------------------------------------------------------------
 # 1. BGE CROSS-ENCODER RERANKER LAYER
@@ -65,10 +91,10 @@ class BGEReranker:
 # 2. HYBRID VECTOR SEARCH KNOWLEDGE RETRIEVER
 # ---------------------------------------------------------------------------
 class KnowledgeRetriever:
-    def __init__(self):
+    def __init__(self, embedder: Optional[BaseEmbedder] = None):
         self.client = chromadb.PersistentClient(path=str(CHROMA_PERSIST_DIR), settings=ChromaSettings(anonymized_telemetry=False))
         self.collection = self.client.get_or_create_collection(name=CHROMA_COLLECTION_NAME)
-        self.embedder = BGEM3Embedder()
+        self.embedder = embedder or get_embedder()
         self.reranker = BGEReranker()
 
     def retrieve(self, query_text: str, top_k: int = 10) -> List[Dict[str, Any]]:
@@ -94,17 +120,43 @@ class KnowledgeRetriever:
                 dist = dists[i]
                 sim_pct = int(max(0.0, (1.0 - dist)) * 100)
                 meta = metas[i] if i < len(metas) else {}
+                sec = meta.get("section", "")
+                sec_title = f"قسم: {sec} (جزء {meta.get('chunk_index', 1)})" if sec and sec != "General" else f"جزء {meta.get('chunk_index', 1)}"
 
                 candidates.append({
                     "text": docs[i],
                     "title": meta.get("file_name", "وثيقة"),
-                    "section_title": f"جزء {meta.get('chunk_index', 1)}",
+                    "section_title": sec_title,
                     "similarity_score": sim_pct,
                     "distance": dist,
                     "metadata": meta
                 })
 
         return self.reranker.rerank(query_text, candidates, top_k=top_k)
+
+    def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
+        if not chunk_ids:
+            return []
+        try:
+            res = self.collection.get(ids=chunk_ids, include=["documents", "metadatas"])
+            chunks = []
+            if res and res.get("documents"):
+                docs = res["documents"]
+                metas = res["metadatas"]
+                for i in range(len(docs)):
+                    meta = metas[i] if i < len(metas) else {}
+                    sec = meta.get("section", "")
+                    sec_title = f"قسم: {sec} (جزء {meta.get('chunk_index', 1)})" if sec and sec != "General" else f"جزء {meta.get('chunk_index', 1)}"
+                    chunks.append({
+                        "chunk_id": chunk_ids[i],
+                        "text": docs[i],
+                        "title": meta.get("file_name", "وثيقة"),
+                        "section_title": sec_title,
+                        "metadata": meta
+                    })
+            return chunks
+        except Exception:
+            return []
 
 # ---------------------------------------------------------------------------
 # 3. CONSOLIDATED RAG & DIALECT CHATBOT ENGINE
@@ -147,9 +199,9 @@ class RAGChatbot:
             return {"query": query, "answer": "الرجاء إدخال سؤال للبحث والإجابة.", "sources": [], "time_taken": 0.0}
 
         normalized_query, detected_accent = self.detect_and_normalize_query(query)
-        sources = self.retriever.retrieve(query_text=normalized_query, top_k=top_k)
+        raw_sources = self.retriever.retrieve(query_text=normalized_query, top_k=top_k)
 
-        if not sources:
+        if not raw_sources:
             fallback_msg = {
                 "jordanian": "للأسف ما لقيت وثائق أو معلومات مباشرة بتخص سؤالك بقاعدة المعرفة حالياً.",
                 "english": "Sorry, no relevant documents or sources were found in the knowledge base.",
@@ -157,20 +209,60 @@ class RAGChatbot:
             }
             return {"query": query, "answer": fallback_msg.get(detected_accent, fallback_msg["msa"]), "sources": [], "time_taken": round(time.time() - start_time, 2)}
 
-        context_blocks = []
-        for src in sources:
-            rank = src.get("rank", 1)
-            title = src.get("title", "وثيقة")
-            section = src.get("section_title", "")
-            score = src.get("similarity_score", 0.0)
-            raw_text = src.get("text", "").strip()
-            text_snippet = raw_text[:400] + "..." if len(raw_text) > 400 else raw_text
+        # Stage 10 — Retrieval Order Preservation & Consecutive Chunk Merging
+        grouped_docs: Dict[str, List[Dict[str, Any]]] = {}
+        for src in raw_sources:
+            src_key = src.get("metadata", {}).get("source_id") or src.get("title", "doc")
+            if src_key not in grouped_docs:
+                grouped_docs[src_key] = []
+            grouped_docs[src_key].append(src)
 
-            header = f"[المصدر {rank}] {title}"
-            if section:
-                header += f" — {section}"
-            header += f" (نسبة التطابق: {score}%)"
-            context_blocks.append(f"{header}\n{text_snippet}\n")
+        sources = []
+        context_blocks = []
+        global_rank = 1
+
+        for src_key, doc_chunks in grouped_docs.items():
+            sorted_chunks = sorted(
+                doc_chunks,
+                key=lambda x: int(x.get("metadata", {}).get("chunk_index", 1))
+            )
+
+            merged_groups: List[List[Dict[str, Any]]] = []
+            curr_group: List[Dict[str, Any]] = []
+            for ch in sorted_chunks:
+                if not curr_group:
+                    curr_group.append(ch)
+                else:
+                    prev_idx = int(curr_group[-1].get("metadata", {}).get("chunk_index", -1))
+                    curr_idx = int(ch.get("metadata", {}).get("chunk_index", -2))
+                    if curr_idx == prev_idx + 1:
+                        curr_group.append(ch)
+                    else:
+                        merged_groups.append(curr_group)
+                        curr_group = [ch]
+            if curr_group:
+                merged_groups.append(curr_group)
+
+            for group in merged_groups:
+                first_src = dict(group[0])
+                merged_text = "\n\n".join(c.get("text", "").strip() for c in group)
+                title = first_src.get("title", "وثيقة")
+                sec_name = first_src.get("metadata", {}).get("section", "")
+                chunk_indices = ", ".join(str(c.get("metadata", {}).get("chunk_index", 1)) for c in group)
+                score = max(c.get("similarity_score", 0.0) for c in group)
+
+                header = f"[المصدر {global_rank}] {title}"
+                if sec_name and sec_name != "General":
+                    header += f" — قسم: {sec_name}"
+                header += f" (الأجزاء: {chunk_indices} | نسبة التطابق: {score}%)"
+
+                context_blocks.append(f"{header}\n{merged_text}\n")
+
+                first_src["rank"] = global_rank
+                first_src["text"] = merged_text
+                first_src["section_title"] = f"قسم: {sec_name} (أجزاء {chunk_indices})" if sec_name else f"أجزاء {chunk_indices}"
+                sources.append(first_src)
+                global_rank += 1
 
         context_str = "\n" + ("=" * 50) + "\n" + "\n".join(context_blocks) + ("=" * 50)
 

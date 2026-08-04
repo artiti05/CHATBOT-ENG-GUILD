@@ -24,12 +24,18 @@ CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 CHROMA_COLLECTION_NAME = "guild_knowledge_base"
 
 # Embedding Model Settings
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "qwen")  # "qwen" or "bge-m3"
+QWEN_EMBEDDING_MODEL_NAME = os.getenv("QWEN_EMBEDDING_MODEL_NAME", "Alibaba-NLP/gte-Qwen2-1.5B-instruct")
 BGE_M3_MODEL_NAME = "BAAI/bge-m3"
 BGE_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 USE_FP16 = True
 
-# Chunking settings
-CHUNK_SIZE_TOKENS = 400
+# Chunking settings (Enhanced Semantic Chunking)
+TARGET_CHUNK_WORDS = 700
+MIN_CHUNK_WORDS = 500
+MAX_CHUNK_WORDS = 900
+OVERLAP_SENTENCES = 2
+CHUNK_SIZE_TOKENS = TARGET_CHUNK_WORDS
 CHUNK_OVERLAP_TOKENS = 50
 
 # Web Crawler settings

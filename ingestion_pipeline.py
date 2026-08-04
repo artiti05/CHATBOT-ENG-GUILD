@@ -30,14 +30,17 @@ try:
 except ImportError:
     HAS_BGEM3 = False
 
+from abc import ABC, abstractmethod
 from config.settings import (
     BASE_DIR, STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH,
-    CHROMA_COLLECTION_NAME, BGE_M3_MODEL_NAME, USE_FP16, CHUNK_SIZE_TOKENS,
-    CHUNK_OVERLAP_TOKENS, VLM_PROVIDER, OLLAMA_URL, OLLAMA_VISION_MODEL,
-    LMSTUDIO_BASE_URL, LMSTUDIO_VISION_MODEL, PARSED_OUTPUT_DIR,
-    RENDER_DPI, CLAHE_CLIP_LIMIT, CLAHE_TILE_GRID, MIN_TABLE_AREA_FRACTION,
-    TABLE_UPSCALE_FACTOR, TABLE_CROP_PADDING, REQUEST_TIMEOUT, NUM_CTX, NUM_PREDICT,
-    FILES_DIR, TEXTS_DIR, PDFS_DIR, IGNORE_TEXTS_DIR, EXCLUDE_DIRS, UNIFIED_VISION_PROMPT
+    CHROMA_COLLECTION_NAME, EMBEDDING_PROVIDER, QWEN_EMBEDDING_MODEL_NAME,
+    BGE_M3_MODEL_NAME, USE_FP16, CHUNK_SIZE_TOKENS, CHUNK_OVERLAP_TOKENS,
+    TARGET_CHUNK_WORDS, MIN_CHUNK_WORDS, MAX_CHUNK_WORDS, OVERLAP_SENTENCES,
+    VLM_PROVIDER, OLLAMA_URL, OLLAMA_VISION_MODEL, LMSTUDIO_BASE_URL,
+    LMSTUDIO_VISION_MODEL, PARSED_OUTPUT_DIR, RENDER_DPI, CLAHE_CLIP_LIMIT,
+    CLAHE_TILE_GRID, MIN_TABLE_AREA_FRACTION, TABLE_UPSCALE_FACTOR,
+    TABLE_CROP_PADDING, REQUEST_TIMEOUT, NUM_CTX, NUM_PREDICT, FILES_DIR,
+    TEXTS_DIR, PDFS_DIR, IGNORE_TEXTS_DIR, EXCLUDE_DIRS, UNIFIED_VISION_PROMPT
 )
 
 
@@ -389,12 +392,212 @@ def parse_and_save_pdf_vision(pdf_path: Path) -> Tuple[str, Path, int]:
     return full_text, parsed_md_path, total_pages
 
 # ---------------------------------------------------------------------------
-# 5. TOKEN CHUNKER LAYER
+# 5. TOKEN & SEMANTIC CHUNKER LAYER (HTML TABLES, SENTENCE BOUNDARIES, ORDER PRESERVING)
 # ---------------------------------------------------------------------------
+def split_into_sentences(text: str) -> List[str]:
+    """
+    Splits text into complete sentences (Arabic and English), preserving punctuation.
+    Sentences are atomic units and are never cut mid-sentence.
+    """
+    if not text or not text.strip():
+        return []
+
+    text = text.strip()
+    raw_sentences = re.split(r'(?<=[.!?؟\n])\s+', text)
+    sentences = [s.strip() for s in raw_sentences if s and s.strip()]
+    return sentences if sentences else [text]
+
+
+def convert_markdown_table_to_html(table_text: str) -> str:
+    """
+    Converts Markdown pipe tables or raw text tables into clean HTML <table>...</table> format.
+    If already HTML <table>...</table>, preserves it unchanged.
+    """
+    table_text = table_text.strip()
+    if table_text.startswith("<table") and table_text.endswith("</table>"):
+        return table_text
+
+    lines = [l.strip() for l in table_text.splitlines() if l.strip()]
+    if not lines:
+        return table_text
+
+    rows = []
+    for line in lines:
+        if re.match(r'^\|[\s:-|-]+\|$', line):
+            continue
+        if '|' in line:
+            cells = [c.strip() for c in line.strip('|').split('|')]
+            rows.append(cells)
+        else:
+            cells = line.split()
+            if cells:
+                rows.append(cells)
+
+    if not rows:
+        return table_text
+
+    header = rows[0]
+    data_rows = rows[1:] if len(rows) > 1 else []
+
+    html_parts = ["<table>", "  <thead>", "    <tr>"]
+    for h in header:
+        html_parts.append(f"      <th>{h}</th>")
+    html_parts.extend(["    </tr>", "  </thead>", "  <tbody>"])
+
+    for r in data_rows:
+        html_parts.append("    <tr>")
+        for c in r:
+            html_parts.append(f"      <td>{c}</td>")
+        html_parts.append("    </tr>")
+
+    html_parts.extend(["  </tbody>", "</table>"])
+    return "\n".join(html_parts)
+
+
 class TextChunker:
-    def __init__(self, chunk_size_tokens: int = CHUNK_SIZE_TOKENS, chunk_overlap_tokens: int = CHUNK_OVERLAP_TOKENS):
-        self.chunk_size = chunk_size_tokens
-        self.chunk_overlap = chunk_overlap_tokens
+    """
+    Enhanced Semantic Chunker:
+    - Target 700 words (Min 500, Max 900)
+    - Preserves sentence boundaries & paragraph continuity
+    - Preserves section & heading boundaries
+    - Preserves HTML tables & list items as atomic units
+    - 2-sentence overlap across chunk boundaries
+    - Preserves doubly-linked neighbor relationships (previous_chunk / next_chunk)
+    """
+    def __init__(
+        self,
+        target_chunk_words: int = TARGET_CHUNK_WORDS,
+        min_chunk_words: int = MIN_CHUNK_WORDS,
+        max_chunk_words: int = MAX_CHUNK_WORDS,
+        overlap_sentences: int = OVERLAP_SENTENCES,
+    ):
+        self.target_words = target_chunk_words
+        self.min_words = min_chunk_words
+        self.max_words = max_chunk_words
+        self.overlap_sentences = overlap_sentences
+
+    def parse_document_blocks(self, text: str) -> List[Dict[str, Any]]:
+        blocks = []
+        lines = text.splitlines()
+        i = 0
+        n = len(lines)
+
+        current_page = 1
+        current_section = "General"
+        current_subsection = ""
+
+        while i < n:
+            line = lines[i]
+            stripped = line.strip()
+
+            if not stripped:
+                i += 1
+                continue
+
+            # 1. Page Marker
+            page_match = re.match(r'<!-- ===== Page (\d+) ===== -->', stripped)
+            if page_match:
+                current_page = int(page_match.group(1))
+                i += 1
+                continue
+
+            # 2. Section Headings
+            heading_match = re.match(r'^(#{1,6})\s+(.+)', stripped)
+            if heading_match:
+                level = len(heading_match.group(1))
+                title = heading_match.group(2).strip()
+                if level <= 2:
+                    current_section = title
+                    current_subsection = ""
+                else:
+                    current_subsection = title
+
+                blocks.append({
+                    "type": "heading",
+                    "content": stripped,
+                    "section": current_section,
+                    "subsection": current_subsection,
+                    "page": current_page,
+                    "words": len(stripped.split())
+                })
+                i += 1
+                continue
+
+            # 3. HTML or Markdown Tables
+            if stripped.startswith("<table") or re.match(r'^\|.*\|$', stripped):
+                table_lines = []
+                while i < n:
+                    s_line = lines[i].strip()
+                    if (s_line.startswith("<table") or s_line.endswith("</table>") or
+                        s_line.startswith("</table") or re.match(r'^\|.*\|$', s_line) or
+                        ("<tr" in s_line or "<td" in s_line or "<th" in s_line)):
+                        table_lines.append(lines[i])
+                        i += 1
+                        if s_line.endswith("</table>") or s_line.startswith("</table"):
+                            break
+                    else:
+                        break
+
+                table_raw = "\n".join(table_lines)
+                html_table = convert_markdown_table_to_html(table_raw)
+                blocks.append({
+                    "type": "table",
+                    "content": html_table,
+                    "section": current_section,
+                    "subsection": current_subsection,
+                    "page": current_page,
+                    "words": len(html_table.split())
+                })
+                continue
+
+            # 4. Lists (Atomic Units)
+            if re.match(r'^([-*+]|\d+\.|•)\s+', stripped):
+                list_lines = []
+                while i < n and re.match(r'^\s*([-*+]|\d+\.|•)\s+', lines[i]):
+                    list_lines.append(lines[i].strip())
+                    i += 1
+
+                list_content = "\n".join(list_lines)
+                blocks.append({
+                    "type": "list",
+                    "content": list_content,
+                    "section": current_section,
+                    "subsection": current_subsection,
+                    "page": current_page,
+                    "words": len(list_content.split())
+                })
+                continue
+
+            # 5. Text Paragraphs
+            para_lines = []
+            while i < n:
+                s_line = lines[i].strip()
+                if not s_line:
+                    i += 1
+                    break
+                if (re.match(r'<!-- ===== Page (\d+) ===== -->', s_line) or
+                    re.match(r'^(#{1,6})\s+', s_line) or
+                    s_line.startswith("<table") or
+                    re.match(r'^\|.*\|$', s_line) or
+                    re.match(r'^([-*+]|\d+\.|•)\s+', s_line)):
+                    break
+                para_lines.append(s_line)
+                i += 1
+
+            if para_lines:
+                para_text = " ".join(para_lines)
+                sentences = split_into_sentences(para_text)
+                blocks.append({
+                    "type": "paragraph",
+                    "content": para_text,
+                    "sentences": sentences,
+                    "section": current_section,
+                    "subsection": current_subsection,
+                    "page": current_page,
+                    "words": len(para_text.split())
+                })
+
+        return blocks
 
     def chunk_text(self, document_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
         text = document_dict.get("full_text", "")
@@ -404,56 +607,171 @@ class TextChunker:
         source_id = document_dict.get("source_id", "doc_unknown")
         file_name = document_dict.get("file_name", "unknown")
         source_type = document_dict.get("source_type", "pdf")
-        paragraphs = text.split("\n\n")
 
-        chunks = []
-        current_words = []
-        current_len = 0
-        chunk_idx = 1
+        blocks = self.parse_document_blocks(text)
+        if not blocks:
+            return []
 
-        for para in paragraphs:
-            para_words = para.strip().split()
-            if not para_words:
-                continue
+        raw_chunks = []
+        curr_units = []
+        curr_sentences = []
+        curr_word_count = 0
+        curr_section = blocks[0]["section"]
+        curr_subsection = blocks[0]["subsection"]
+        page_start = blocks[0]["page"]
+        page_end = blocks[0]["page"]
 
-            para_len = len(para_words)
-            if current_len + para_len > self.chunk_size and current_words:
-                chunk_str = " ".join(current_words)
-                chunks.append({
-                    "chunk_id": f"{source_id}_chunk_{chunk_idx}",
-                    "source_id": source_id,
-                    "file_name": file_name,
-                    "source_type": source_type,
-                    "chunk_index": chunk_idx,
-                    "text": chunk_str,
-                    "word_count": len(current_words)
-                })
-                chunk_idx += 1
-                overlap_words = current_words[-self.chunk_overlap:] if len(current_words) > self.chunk_overlap else []
-                current_words = overlap_words + para_words
-                current_len = len(current_words)
-            else:
-                current_words.extend(para_words)
-                current_len += para_len
+        def finalize_chunk():
+            nonlocal curr_units, curr_sentences, curr_word_count, page_start, page_end
+            if not curr_units:
+                return
 
-        if current_words:
-            chunk_str = " ".join(current_words)
-            chunks.append({
-                "chunk_id": f"{source_id}_chunk_{chunk_idx}",
+            chunk_text_str = "\n\n".join(curr_units)
+            raw_chunks.append({
+                "text": chunk_text_str,
+                "section": curr_section,
+                "subsection": curr_subsection,
+                "page_start": page_start,
+                "page_end": page_end,
+                "word_count": len(chunk_text_str.split()),
+                "sentence_count": len(curr_sentences),
+                "char_count": len(chunk_text_str)
+            })
+
+        for b in blocks:
+            b_type = b["type"]
+            page_end = b["page"]
+
+            # Section boundary check
+            if b_type == "heading":
+                if curr_word_count >= self.min_words:
+                    finalize_chunk()
+                    overlap = curr_sentences[-self.overlap_sentences:] if len(curr_sentences) >= self.overlap_sentences else curr_sentences
+                    curr_units = list(overlap) + [b["content"]]
+                    curr_sentences = list(overlap)
+                    curr_word_count = sum(len(u.split()) for u in curr_units)
+                    curr_section = b["section"]
+                    curr_subsection = b["subsection"]
+                    page_start = b["page"]
+                    continue
+                else:
+                    curr_section = b["section"]
+                    curr_subsection = b["subsection"]
+
+            units_to_add = b["sentences"] if b_type == "paragraph" else [b["content"]]
+
+            for unit in units_to_add:
+                u_words = len(unit.split())
+
+                if curr_word_count + u_words > self.max_words and curr_word_count >= self.min_words:
+                    finalize_chunk()
+                    overlap = curr_sentences[-self.overlap_sentences:] if len(curr_sentences) >= self.overlap_sentences else curr_sentences
+                    curr_units = list(overlap) + [unit]
+                    curr_sentences = list(overlap) + ([unit] if b_type == "paragraph" else [])
+                    curr_word_count = sum(len(u.split()) for u in curr_units)
+                    page_start = b["page"]
+                else:
+                    curr_units.append(unit)
+                    if b_type == "paragraph":
+                        curr_sentences.append(unit)
+                    curr_word_count += u_words
+
+        if curr_units:
+            finalize_chunk()
+
+        # Generate neighbor references and rich metadata
+        final_chunks = []
+        total_count = len(raw_chunks)
+        for idx, rc in enumerate(raw_chunks, start=1):
+            cid = f"{source_id}_chunk_{idx}"
+            prev_id = f"{source_id}_chunk_{idx - 1}" if idx > 1 else ""
+            next_id = f"{source_id}_chunk_{idx + 1}" if idx < total_count else ""
+
+            rc.update({
+                "chunk_id": cid,
                 "source_id": source_id,
                 "file_name": file_name,
                 "source_type": source_type,
-                "chunk_index": chunk_idx,
-                "text": chunk_str,
-                "word_count": len(current_words)
+                "chunk_index": idx,
+                "previous_chunk": prev_id,
+                "next_chunk": next_id
             })
+            final_chunks.append(rc)
 
-        return chunks
+        return final_chunks
+
 
 # ---------------------------------------------------------------------------
-# 6. BGE-M3 EMBEDDER LAYER
+# 6. ABSTRACT BASE EMBEDDER & CONCRETE EMBEDDER PROVIDERS
 # ---------------------------------------------------------------------------
-class BGEM3Embedder:
+class BaseEmbedder(ABC):
+    """Abstract base interface for pluggable embedding models."""
+
+    @abstractmethod
+    def embed_texts(self, texts: List[str]) -> Tuple[List[List[float]], List[Dict[str, float]]]:
+        """Generates dense vector embeddings (and optional sparse lexical weights) for input texts."""
+        pass
+
+    def embed_query(self, query: str) -> List[float]:
+        """Generates dense vector embedding for a single search query."""
+        dense_vecs, _ = self.embed_texts([query])
+        return dense_vecs[0] if dense_vecs else [0.0] * 1024
+
+
+class QwenEmbedder(BaseEmbedder):
+    """
+    Qwen 3 Embedding Model implementation using SentenceTransformer / Transformers.
+    Primary default provider for multi-lingual, MSA, and dialect retrieval.
+    """
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(QwenEmbedder, cls).__new__(cls)
+            cls._instance.model = None
+            cls._instance._load_model()
+        return cls._instance
+
+    def _load_model(self):
+        print(f"[Embedder] Loading Qwen Embedding model '{QWEN_EMBEDDING_MODEL_NAME}'...")
+        try:
+            from sentence_transformers import SentenceTransformer
+            self.model = SentenceTransformer(QWEN_EMBEDDING_MODEL_NAME, trust_remote_code=True)
+            print("[Embedder] Successfully loaded Qwen Embedding model via SentenceTransformers.")
+            return
+        except Exception as e:
+            print(f"[Embedder Warning] SentenceTransformer could not load '{QWEN_EMBEDDING_MODEL_NAME}': {e}")
+
+        try:
+            from transformers import AutoTokenizer, AutoModel
+            import torch
+            self.tokenizer = AutoTokenizer.from_pretrained(QWEN_EMBEDDING_MODEL_NAME, trust_remote_code=True)
+            self.model = AutoModel.from_pretrained(QWEN_EMBEDDING_MODEL_NAME, trust_remote_code=True)
+            if torch.cuda.is_available():
+                self.model = self.model.cuda()
+            self.model.eval()
+            print("[Embedder] Successfully loaded Qwen Embedding model via Transformers AutoModel.")
+        except Exception as e2:
+            print(f"[Embedder Warning] Transformers AutoModel fallback failed: {e2}")
+            self.model = None
+
+    def embed_texts(self, texts: List[str]) -> Tuple[List[List[float]], List[Dict[str, float]]]:
+        if not texts:
+            return [], []
+        if self.model is not None:
+            try:
+                if hasattr(self.model, "encode"):
+                    embeddings = self.model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+                    dense_vecs = embeddings.tolist() if hasattr(embeddings, "tolist") else [list(e) for e in embeddings]
+                    return dense_vecs, [{}] * len(texts)
+            except Exception as e:
+                print(f"[Embedder Error] Qwen encoding error: {e}")
+
+        return [[0.0] * 1024 for _ in texts], [{}] * len(texts)
+
+
+class BGEM3Embedder(BaseEmbedder):
+    """BAAI/bge-m3 embedding model implementation via FlagEmbedding."""
     _instance = None
 
     def __new__(cls):
@@ -484,17 +802,27 @@ class BGEM3Embedder:
         else:
             return [[0.0] * 1024 for _ in texts], [{}] * len(texts)
 
+
+def get_embedder(provider: Optional[str] = None) -> BaseEmbedder:
+    """Factory function returning the active BaseEmbedder instance based on configuration."""
+    prov = (provider or EMBEDDING_PROVIDER).lower()
+    if prov in ["qwen", "qwen3"]:
+        return QwenEmbedder()
+    else:
+        return BGEM3Embedder()
+
+
 # ---------------------------------------------------------------------------
 # 7. CHROMA VECTOR STORE INDEXER LAYER
 # ---------------------------------------------------------------------------
 class ChromaIndexer:
-    def __init__(self):
+    def __init__(self, embedder: Optional[BaseEmbedder] = None):
         self.client = chromadb.PersistentClient(path=str(CHROMA_PERSIST_DIR), settings=ChromaSettings(anonymized_telemetry=False))
+        self.embedder = embedder or get_embedder()
         self.collection = self.client.get_or_create_collection(
             name=CHROMA_COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine", "description": "Guild Knowledge Base BGE-M3 Embeddings"}
+            metadata={"hnsw:space": "cosine", "description": "Guild Knowledge Base Vector Embeddings"}
         )
-        self.embedder = BGEM3Embedder()
 
     def index_chunks(self, chunks: List[Dict[str, Any]]):
         if not chunks:
@@ -504,11 +832,19 @@ class ChromaIndexer:
         documents = [c["text"] for c in chunks]
         metadatas = [
             {
-                "source_id": c["source_id"],
-                "file_name": c["file_name"],
-                "source_type": c["source_type"],
-                "chunk_index": c["chunk_index"],
-                "word_count": c["word_count"]
+                "source_id": c.get("source_id", ""),
+                "file_name": c.get("file_name", ""),
+                "source_type": c.get("source_type", ""),
+                "section": c.get("section", ""),
+                "subsection": c.get("subsection", ""),
+                "page_start": c.get("page_start", 1),
+                "page_end": c.get("page_end", 1),
+                "chunk_index": c.get("chunk_index", 1),
+                "previous_chunk": c.get("previous_chunk", ""),
+                "next_chunk": c.get("next_chunk", ""),
+                "word_count": c.get("word_count", 0),
+                "sentence_count": c.get("sentence_count", 0),
+                "char_count": c.get("char_count", 0)
             }
             for c in chunks
         ]
