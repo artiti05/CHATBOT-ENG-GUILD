@@ -1,0 +1,30 @@
+services:
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama_models:/root/.ollama
+    # Uncomment on a GPU host:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  rag-service:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - ./storage:/app/storage        # persist ChromaDB + registry
+      - hf_cache:/root/.cache/huggingface  # cache embedding models across restarts
+    depends_on:
+      - ollama
+
+volumes:
+  ollama_models:
+  hf_cache:
