@@ -7,7 +7,7 @@ It processes complex Arabic documents, handles reversed Bidi character streams, 
 
 ---
 
-## 📌 Table of Contents
+## Table of Contents
 - [What the Project is About](#-what-the-project-is-about)
 - [System Architecture & Storage](#-system-architecture--storage)
 - [Prerequisites & Setup](#-prerequisites--setup)
@@ -23,7 +23,7 @@ It processes complex Arabic documents, handles reversed Bidi character streams, 
 
 ---
 
-## 💡 What the Project is About
+##  What the Project is About
 
 The Jordan Engineers Association manages an extensive collection of legal bylaws, strategic plans, service guides, university admission criteria, and operational news. This system provides an intelligent knowledge base assistant capable of:
 
@@ -34,7 +34,7 @@ The Jordan Engineers Association manages an extensive collection of legal bylaws
 
 ---
 
-## 🏗 System Architecture & Storage
+## System Architecture & Storage
 
 ```
 CHATBOT-ENG-GUILD/
@@ -60,12 +60,12 @@ CHATBOT-ENG-GUILD/
 
 ---
 
-## 🚀 Prerequisites & Setup
+## Prerequisites & Setup
 
 ### 1. Python Environment Setup
 ```powershell
 # Clone repository
-git clone https://github.com/shatnawiO/arabic-pdf-parser.git
+git clone https://github.com/artiti05/CHATBOT-ENG-GUILD.git
 cd CHATBOT-ENG-GUILD
 
 # Create virtual environment
@@ -106,9 +106,9 @@ ollama serve
 
 ---
 
-## 💻 How to Run
+##  How to Run
 
-All execution modes are controlled through the unified entry point [`main.py`](file:///c:/Users/VICTUS/Desktop/CHATBOT-ENG-GUILD/main.py).
+All execution modes are controlled through the unified entry point [`main.py`]
 
 ### Launch the Web Application & Chatbot UI
 ```powershell
@@ -120,7 +120,7 @@ Open your browser at **`http://localhost:8000`** *(automatically detects alterna
 
 ---
 
-## 📚 Knowledge Base Handling & Ingestion
+##  Knowledge Base Handling & Ingestion
 
 The system ingests three primary types of knowledge sources:
 
@@ -162,7 +162,7 @@ The system ingests three primary types of knowledge sources:
 
 ---
 
-## 🔑 Security & API Integration Guide
+##  Security & API Integration Guide
 
 ### 1. Authentication & CORS
 All modifying/data endpoints (`POST /api/chat` and `POST /api/search`) require header authentication.
@@ -336,7 +336,7 @@ except requests.exceptions.RequestException as e:
 
 ---
 
-## ⚙️ Configuration Reference (`config/settings.py`)
+##  Configuration Reference (`config/settings.py`)
 
 | Parameter | Default Value | Purpose |
 | :--- | :--- | :--- |
@@ -349,6 +349,6 @@ except requests.exceptions.RequestException as e:
 
 ---
 
-## 📄 License
+##  License
 
 MIT License. Designed and developed for the Jordan Engineers Association (نقابة المهندسين الأردنيين).
