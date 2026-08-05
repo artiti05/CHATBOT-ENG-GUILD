@@ -1,9 +1,17 @@
+import sys
+from pathlib import Path
+
+# Force UTF-8 encoding on Windows console stdout/stderr
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
-import sys
-from pathlib import Path
 
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,7 +39,7 @@ class ChatRequest(BaseModel):
     top_k: int = 10
 
 @app.post("/api/search")
-async def search_documents(req: SearchRequest):
+def search_documents(req: SearchRequest):
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
     
@@ -39,7 +47,7 @@ async def search_documents(req: SearchRequest):
     return {"query": req.query, "count": len(results), "results": results}
 
 @app.post("/api/chat")
-async def chat_with_kb(req: ChatRequest):
+def chat_with_kb(req: ChatRequest):
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
     
@@ -48,13 +56,13 @@ async def chat_with_kb(req: ChatRequest):
     return response
 
 @app.get("/api/stats")
-async def get_stats():
+def get_stats():
     total_docs = len(registry.list_documents())
-    total_chunks = retriever.indexer.collection.count()
+    total_chunks = retriever.collection.count()
     return {"total_documents": total_docs, "total_chunks": total_chunks}
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_ui():
+def serve_ui():
     return HTML_CONTENT
 
 HTML_CONTENT = """<!DOCTYPE html>
@@ -673,3 +681,20 @@ HTML_CONTENT = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+if __name__ == "__main__":
+    import uvicorn
+    import socket
+
+    def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex((host, port)) == 0
+
+    target_port = 8080
+    for p in [8080, 8000, 8081, 8501, 5000]:
+        if not is_port_in_use(p):
+            target_port = p
+            break
+
+    print(f"\n[INFO] Starting Guild Knowledge Base Chatbot Web Server on http://127.0.0.1:{target_port} ...")
+    uvicorn.run(app, host="127.0.0.1", port=target_port)
