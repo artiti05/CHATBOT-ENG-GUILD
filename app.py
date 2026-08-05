@@ -1,4 +1,5 @@
 import sys
+import os
 from pathlib import Path
 
 # Force UTF-8 encoding on Windows console stdout/stderr
@@ -8,7 +9,9 @@ if sys.platform == "win32":
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security
+from fastapi.security import APIKeyHeader
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -20,6 +23,22 @@ from rag_chatbot_engine import KnowledgeRetriever, RAGChatbot
 from crawler_admin import DocumentRegistry
 
 app = FastAPI(title="Guild Knowledge Base RAG Chatbot UI", version="3.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else [],
+    allow_methods=["POST", "GET"],
+    allow_headers=["X-API-Key", "Content-Type"],
+)
+API_KEY = os.getenv("RAG_API_KEY", "")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def verify_key(key: str = Security(api_key_header)):
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="RAG_API_KEY not configured on server")
+    if key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return key
 
 retriever = KnowledgeRetriever()
 chatbot = RAGChatbot()
@@ -39,7 +58,7 @@ class ChatRequest(BaseModel):
     top_k: int = 10
 
 @app.post("/api/search")
-def search_documents(req: SearchRequest):
+async def search_documents(req: SearchRequest, _=Security(verify_key)):
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
     
@@ -47,13 +66,21 @@ def search_documents(req: SearchRequest):
     return {"query": req.query, "count": len(results), "results": results}
 
 @app.post("/api/chat")
-def chat_with_kb(req: ChatRequest):
+async def chat_with_kb(req: ChatRequest, _=Security(verify_key)):
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
-    
+
     hist_dicts = [{"role": h.role, "content": h.content} for h in req.history] if req.history else []
     response = chatbot.answer_question(query=req.query, history=hist_dicts, top_k=req.top_k)
     return response
+
+@app.get("/api/health")
+async def health():
+    try:
+        chunk_count = retriever.collection.count()
+        return {"status": "ok", "chunks": chunk_count}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 @app.get("/api/stats")
 def get_stats():
@@ -105,7 +132,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             overflow: hidden;
         }
 
-        /* CENTERED HEADER */
         header {
             background: var(--header-bg);
             backdrop-filter: blur(16px);
@@ -149,7 +175,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             font-weight: 500;
         }
 
-        /* MAIN CHAT WRAPPER */
         main {
             flex: 1;
             display: flex;
@@ -162,7 +187,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             height: calc(100vh - 85px);
         }
 
-        /* CHAT MESSAGES SCROLL CONTAINER */
         #chat-feed {
             flex: 1;
             overflow-y: auto;
@@ -181,7 +205,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             border-radius: 4px;
         }
 
-        /* WELCOME SCREEN */
         .welcome-card {
             background: var(--card-bg);
             border: 1px solid var(--card-border);
@@ -233,7 +256,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             color: #fff;
         }
 
-        /* MESSAGE BUBBLES */
         .message-row {
             display: flex;
             flex-direction: column;
@@ -294,7 +316,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             word-break: break-word;
         }
 
-        /* COLLAPSIBLE SOURCES ACCORDION (MODERN CHATBOT STYLE) */
         .sources-accordion-container {
             margin-top: 1rem;
             width: 100%;
@@ -384,7 +405,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             white-space: pre-wrap;
         }
 
-        /* CHAT INPUT CONTAINER FIXED AT BOTTOM */
         .input-bar-container {
             padding: 1rem 0;
             background: transparent;
@@ -447,7 +467,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             cursor: not-allowed;
         }
 
-        /* TYPING INDICATOR */
         .typing-indicator {
             display: flex;
             align-items: center;
@@ -474,7 +493,6 @@ HTML_CONTENT = """<!DOCTYPE html>
 </head>
 <body>
 
-    <!-- CENTERED HEADER (NO STATS PILLS, NO UNWANTED TABS) -->
     <header>
         <div class="header-brand">
             <h1>نقابة المهندسين الأردنيين</h1>
@@ -483,7 +501,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     </header>
 
     <main>
-        <!-- SCROLLABLE CHAT FEED -->
         <div id="chat-feed">
             <div class="welcome-card" id="welcome-screen">
                 <h2>أهلاً بك في المساعد الذكي لنقابة المهندسين 🤖</h2>
@@ -496,7 +513,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- FIXED BOTTOM CHAT INPUT BAR -->
         <div class="input-bar-container">
             <form class="input-form" id="chat-form" onsubmit="handleSend(event)">
                 <input type="text" id="user-input" placeholder="اكتب سؤالك هنا باللغة العربية، اللهجة الأردنية، أو الإنجليزية..." autocomplete="off" />
@@ -517,31 +533,36 @@ HTML_CONTENT = """<!DOCTYPE html>
             handleSend(new Event('submit'));
         }
 
+        function getApiKey(forceAsk = false) {
+            let key = localStorage.getItem('rag_api_key');
+            if (!key || forceAsk) {
+                key = prompt('أدخل مفتاح API الخاص بالخدمة (X-API-Key):');
+                if (key) localStorage.setItem('rag_api_key', key.trim());
+            }
+            return key ? key.trim() : '';
+        }
+
         async function handleSend(e) {
             e.preventDefault();
             const inputEl = document.getElementById('user-input');
             const query = inputEl.value.trim();
             if (!query) return;
 
-            // Hide welcome screen on first message
             const welcomeScreen = document.getElementById('welcome-screen');
             if (welcomeScreen) welcomeScreen.style.display = 'none';
 
-            // Append User Message to UI
             appendUserMessage(query);
             inputEl.value = '';
 
-            // Disable send button while processing
             const sendBtn = document.getElementById('send-button');
             sendBtn.disabled = true;
 
-            // Append Assistant Typing Indicator
             const typingId = appendTypingIndicator();
 
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': getApiKey() },
                     body: JSON.stringify({
                         query: query,
                         history: chatHistory,
@@ -550,13 +571,20 @@ HTML_CONTENT = """<!DOCTYPE html>
                 });
 
                 const data = await response.json();
+                if (response.status === 401) {
+                    removeTypingIndicator(typingId);
+                    localStorage.removeItem('rag_api_key');
+                    appendAssistantMessage({
+                        answer: 'مفتاح API غير صحيح. أعد تحميل الصفحة وأدخل المفتاح الصحيح.',
+                        sources: []
+                    });
+                    return;
+                }
                 removeTypingIndicator(typingId);
 
-                // Update chat history memory
                 chatHistory.push({ role: 'user', content: query });
                 chatHistory.push({ role: 'assistant', content: data.answer });
 
-                // Append Assistant Response Message with Collapsible Sources
                 appendAssistantMessage(data);
 
             } catch (err) {

@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,21 +27,30 @@ CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 CHROMA_COLLECTION_NAME = "guild_knowledge_base"
 
 # Embedding Model Settings
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "qwen")  # "qwen" or "bge-m3"
+QWEN_EMBEDDING_MODEL_NAME = os.getenv("QWEN_EMBEDDING_MODEL_NAME", "Alibaba-NLP/gte-Qwen2-1.5B-instruct")
 BGE_M3_MODEL_NAME = "BAAI/bge-m3"
 BGE_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 USE_FP16 = True
 
-# Chunking settings
-CHUNK_SIZE_TOKENS = 400
+# Chunking settings (Enhanced Semantic Chunking)
+TARGET_CHUNK_WORDS = 700
+MIN_CHUNK_WORDS = 500
+MAX_CHUNK_WORDS = 900
+OVERLAP_SENTENCES = 2
+CHUNK_SIZE_TOKENS = TARGET_CHUNK_WORDS
 CHUNK_OVERLAP_TOKENS = 50
 
 # Web Crawler settings
 CRAWL_CACHE_DIR = STORAGE_DIR / "crawler_cache"
 CRAWL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Multi-Stage Ingestion Pipeline, Vision PDF Parser & LM Studio / Ollama Settings
+# Multi-Stage Ingestion Pipeline & Ollama Settings
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # "ollama" or "lmstudio"
 VLM_PROVIDER = os.getenv("VLM_PROVIDER", "ollama")  # "ollama" or "lmstudio" or "mock"
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b")
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
 LMSTUDIO_CHAT_MODEL = os.getenv("LMSTUDIO_CHAT_MODEL", "jais-adapted-7b-chat")
@@ -83,4 +95,4 @@ Arabic tables are read right-to-left, and often have a top-level header cell tha
 multiple sub-columns below it (colspan). Do not flatten these into a single row of numbers.
 Keep the header hierarchy explicit using colspan, and keep column order as it visually
 appears on the page (rightmost visual column = first <td> in each row, since this is RTL).
-"""
+"""
