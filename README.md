@@ -6,17 +6,17 @@ It handles complex Arabic document formats, reversed Bidi character streams, and
 
 ---
 
-## 🌟 Key Features
+##  Key Features
 
-* **👁️ Single-Pass Vision PDF Parser**: Uses PyMuPDF at 300 DPI + OpenCV CLAHE contrast enhancement + **Qwen2.5-VL** (via Ollama or LM Studio) to transcribe Arabic prose and format nested RTL tables as HTML `<table>` elements (`colspan`/`rowspan`).
-* **🗣️ Jordanian Dialect Normalization**: Intelligent query translation engine that converts colloquial phrases (e.g., *"شو الأوراق"*, *"بدي أسجل"*, *"قديش"*) into formal Arabic search terms.
-* **⚡ Hybrid Vector Retrieval & Cross-Encoder Reranking**: Uses **BAAI/bge-m3** for dense vector similarity in ChromaDB, followed by **BAAI/bge-reranker-v2-m3** for cross-encoder reranking.
-* **🚀 Multi-Stage Batch Ingestion Utility (`batch_ingest.py`)**: Supports database resets, pre-parsed Markdown indexing, dry-run execution previews, and background GPU VRAM parsing queues.
-* **🎨 Modern Web UI**: Responsive FastAPI & HTML5 interface featuring ambient dark mode, suggestion chips, similarity match badges, and collapsible source citations.
+* ** Single-Pass Vision PDF Parser**: Uses PyMuPDF at 300 DPI + OpenCV CLAHE contrast enhancement + **Qwen2.5-VL** (via Ollama or LM Studio) to transcribe Arabic prose and format nested RTL tables as HTML `<table>` elements (`colspan`/`rowspan`).
+* ** Jordanian Dialect Normalization**: Intelligent query translation engine that converts colloquial phrases (e.g., *"شو الأوراق"*, *"بدي أسجل"*, *"قديش"*) into formal Arabic search terms.
+* ** Hybrid Vector Retrieval & Cross-Encoder Reranking**: Uses **BAAI/bge-m3** for dense vector similarity in ChromaDB, followed by **BAAI/bge-reranker-v2-m3** for cross-encoder reranking.
+* ** Multi-Stage Batch Ingestion Utility (`batch_ingest.py`)**: Supports database resets, pre-parsed Markdown indexing, dry-run execution previews, and background GPU VRAM parsing queues.
+* ** Modern Web UI**: Responsive FastAPI & HTML5 interface featuring ambient dark mode, suggestion chips, similarity match badges, and collapsible source citations.
 
 ---
 
-## 📁 System Architecture
+##  System Architecture
 
 ```
 arabic-pdf-parser/
@@ -34,7 +34,7 @@ arabic-pdf-parser/
 
 ---
 
-## 🛠️ Prerequisites & Setup
+##  Prerequisites & Setup
 
 ### 1. Python Environment
 ```bash
@@ -66,52 +66,63 @@ ollama serve
 
 ---
 
-## 🚀 How to Run (Generic Dual-Device CLI Interface `main.py`)
+##  How to Run (`main.py`)
 
-The unified CLI entry point `main.py` allows running both ingestion (on an Ubuntu parsing device) and chatbot testing/serving (on a local device) seamlessly.
+A single, unified script ([`main.py`](file:///c:/Users/VICTUS/Desktop/arabic-pdf-parser/main.py)) controls all web server and document ingestion execution modes.
 
-### 1. Ingestion Mode (For Ubuntu Parsing & Storage Device)
-Run full PDF vision parsing, token chunking, BGE-M3 embedding, and Chroma vector database storage for files in `pdfs/`:
-
+###  1. Web Application & Chatbot UI
 ```bash
-# Preview ingestion plan without modifying DB or calling VLM (Dry-Run)
-python main.py ingest --dry-run
-
-# Run full batch ingestion (Reset DB -> Index pre-parsed files -> GPU parse remaining PDFs in pdfs/)
-python main.py ingest
-
-# Index pre-parsed Markdown files in output_dir only (No VLM calls)
-python main.py ingest --index-only
-
-# Parse remaining PDFs without resetting existing VDB
-python main.py ingest --no-reset-db
-```
-
-### 2. Interactive Chatbot Testing Mode (Terminal)
-Test chatbot response generation and vector DB retrieval interactively directly in your terminal:
-
-```bash
-# Interactive terminal QA session against stored VDB
-python main.py test
-
-# Single question test query
-python main.py query "ما هي شروط تسجيل المهندسين الأردنيين في النقابة؟"
-```
-
-### 3. Web Chatbot Application Mode
-Launch the web interface and FastAPI server (defaults to port **8080**):
-
-```bash
-python main.py serve
-# Or run direct app: python app.py
+python main.py
+# Or specify port: python main.py serve --port 8000
 ```
 Open your browser and navigate to:
-👉 **`http://localhost:8080`** (or `http://<SERVER_IP>:8080`)
-
+ **`http://localhost:8000`** *(automatically detects and selects an open port if 8000 is occupied)*.
 
 ---
 
-## 📡 API Endpoints
+###  2. Ingest Text Files Only (`texts/`)
+Cleans, chunks (400 tokens), embeds with BGE-M3, and indexes text files from `texts/` into ChromaDB:
+```bash
+python main.py ingest-texts
+```
+*To append without wiping existing vectors:*
+```bash
+python main.py ingest-texts --no-reset-db
+```
+
+---
+
+### 3. Ingest PDF Files Only (`pdfs/`)
+Uses Qwen2.5-VL vision model via Ollama to transcribe prose and complex tables from `pdfs/`, chunks, embeds with BGE-M3, and indexes into ChromaDB:
+```bash
+python main.py ingest-pdfs
+```
+*To append without wiping existing vectors:*
+```bash
+python main.py ingest-pdfs --no-reset-db
+```
+
+---
+
+###  4. Ingest Pre-parsed Markdown Files Only (`output_dir/`)
+Indexes pre-parsed markdown files from `output_dir/`:
+```bash
+python main.py ingest-markdown
+```
+
+---
+
+###  5. Full End-to-End Ingestion (`texts/` + `output_dir/` + `pdfs/`)
+Runs full sequential ingestion across all document sources:
+```bash
+python main.py ingest-all
+```
+
+*(Add `--dry-run` to any ingestion command to preview the file plan without modifying storage).*
+
+---
+
+##  API Endpoints
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
@@ -122,7 +133,7 @@ Open your browser and navigate to:
 
 ---
 
-## 🔧 Configuration Options (`config/settings.py`)
+##  Configuration Options (`config/settings.py`)
 
 Key parameters in [settings.py](file:///c:/Users/VICTUS/Desktop/arabic-pdf-parser/config/settings.py):
 
@@ -138,6 +149,6 @@ Key parameters in [settings.py](file:///c:/Users/VICTUS/Desktop/arabic-pdf-parse
 
 ---
 
-## 📜 License
+##  License
 
 MIT License. Designed and developed for the Jordan Engineers Association (نقابة المهندسين الأردنيين).

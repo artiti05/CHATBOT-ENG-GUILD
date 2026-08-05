@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+
 load_dotenv()
+
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEXTS_DIR = BASE_DIR / "texts"

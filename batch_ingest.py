@@ -19,17 +19,15 @@ from pathlib import Path
 
 # Force UTF-8 stdout encoding for Windows PowerShell/CMD
 if sys.platform == "win32":
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    if hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Add project root to path
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
 from config.settings import (
-    STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH
+    STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH, TEXTS_DIR
 )
 from ingestion_pipeline import IngestionPipeline, clean_document_text
 from crawler_admin import DocumentRegistry
@@ -38,7 +36,7 @@ from crawler_admin import DocumentRegistry
 def reset_storage_db():
     """Resets the ChromaDB vector store directory and SQLite document registry."""
     print("=" * 65)
-    print("[Phase 1/3] Resetting Vector DB & Registry DB in storage/ ...")
+    print("[Phase 0] Resetting Vector DB & Registry DB in storage/ ...")
     print("=" * 65)
 
     if CHROMA_PERSIST_DIR.exists():
@@ -58,6 +56,71 @@ def reset_storage_db():
     CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     print("  ✔ Clean storage initialized.\n")
+
+
+def index_texts_directory(texts_dir: Path, pipeline: IngestionPipeline, registry: DocumentRegistry, dry_run: bool = False) -> int:
+    """Scans texts_dir (and all subdirectories) for .md and .txt files, cleans, chunks, embeds, and indexes them into ChromaDB."""
+    print("=" * 65)
+    print(f"[Phase 1/3] Scanning & Indexing Knowledge Base Text files in '{texts_dir.name}' ...")
+    print("=" * 65)
+
+    if not texts_dir.exists():
+        print(f"  ⚠ Texts directory '{texts_dir}' does not exist. Skipping Phase 1.\n")
+        return 0
+
+    text_files = list(texts_dir.rglob("*.md")) + list(texts_dir.rglob("*.txt"))
+    if not text_files:
+        print(f"  ⚠ No text/markdown files found in '{texts_dir}'. Skipping Phase 1.\n")
+        return 0
+
+    print(f"  ✔ Found {len(text_files)} text files across subdirectories.")
+
+    total_indexed_chunks = 0
+    indexed_files_count = 0
+
+    for idx, text_path in enumerate(text_files, start=1):
+        rel_path = text_path.relative_to(texts_dir)
+
+        if dry_run:
+            print(f"  [Dry Run {idx}/{len(text_files)}] Would index text file: '{rel_path}'")
+            continue
+
+        print(f"  [{idx}/{len(text_files)}] Indexing text file: '{rel_path}' ...")
+        try:
+            with open(text_path, "r", encoding="utf-8", errors="replace") as f:
+                raw_text = f.read()
+
+            if not raw_text.strip():
+                print(f"      ⚠ File '{rel_path}' is empty. Skipping.")
+                continue
+
+            clean_text = clean_document_text(raw_text)
+            source_id = f"text_{hashlib.md5(str(rel_path).encode('utf-8')).hexdigest()[:8]}"
+            doc_dict = {
+                "source_id": source_id,
+                "file_name": str(rel_path),
+                "source_type": "text_kb",
+                "full_text": clean_text,
+                "text_path": str(text_path.resolve())
+            }
+
+            chunks = pipeline.chunker.chunk_text(doc_dict)
+            if chunks:
+                cnt = pipeline.indexer.index_chunks(chunks)
+                registry.register_document(doc_dict, text_path, status="active")
+                total_indexed_chunks += cnt
+                indexed_files_count += 1
+                print(f"      -> Successfully indexed {cnt} chunks.")
+            else:
+                print(f"      ⚠ No chunks generated for '{rel_path}'.")
+        except Exception as e:
+            print(f"      ❌ Error indexing '{rel_path}': {e}")
+
+    if not dry_run:
+        pipeline.flush_memory()
+        print(f"  ✔ Phase 1 Complete: {indexed_files_count} text files indexed ({total_indexed_chunks} chunks total).\n")
+
+    return indexed_files_count
 
 
 def index_preparsed_markdown_files(output_dir: Path, pipeline: IngestionPipeline, registry: DocumentRegistry, dry_run: bool = False):
@@ -170,6 +233,7 @@ def parse_remaining_pdfs_gpu(pdfs_dir: Path, pipeline: IngestionPipeline, regist
 
 def main():
     parser = argparse.ArgumentParser(description="Arabic PDF Parser & Knowledge Base Batch Ingestion Tool")
+    parser.add_argument("--texts-dir", type=str, default="texts", help="Path to input text knowledge base directory")
     parser.add_argument("--output-dir", type=str, default="output_dir", help="Path to pre-parsed Markdown output directory")
     parser.add_argument("--pdfs-dir", type=str, default="pdfs", help="Path to input PDFs directory")
     parser.add_argument("--index-only", action="store_true", help="Reset DB & index pre-parsed Markdown files from output_dir only (no VLM PDF parsing)")
@@ -179,6 +243,7 @@ def main():
 
     args = parser.parse_args()
 
+    texts_dir_path = (BASE_DIR / args.texts_dir).resolve()
     out_dir_path = (BASE_DIR / args.output_dir).resolve()
     pdfs_dir_path = (BASE_DIR / args.pdfs_dir).resolve()
 
@@ -188,6 +253,9 @@ def main():
 
     pipeline = IngestionPipeline()
     registry = DocumentRegistry()
+
+    # 1. Index texts/ directory into vector database
+    index_texts_directory(texts_dir_path, pipeline, registry, dry_run=args.dry_run)
 
     indexed_stems = set()
     if not args.parse_only:

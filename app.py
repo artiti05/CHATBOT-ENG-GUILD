@@ -1,14 +1,20 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
 import sys
-from pathlib import Path
-#extra imports 
 import os
+from pathlib import Path
+
+# Force UTF-8 encoding on Windows console stdout/stderr
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
 
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -68,28 +74,22 @@ async def chat_with_kb(req: ChatRequest, _=Security(verify_key)):
     response = chatbot.answer_question(query=req.query, history=hist_dicts, top_k=req.top_k)
     return response
 
-
-
 @app.get("/api/health")
 async def health():
     try:
         chunk_count = retriever.collection.count()
         return {"status": "ok", "chunks": chunk_count}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))    
-    
-    hist_dicts = [{"role": h.role, "content": h.content} for h in req.history] if req.history else []
-    response = chatbot.answer_question(query=req.query, history=hist_dicts, top_k=req.top_k)
-    return response
+        raise HTTPException(status_code=503, detail=str(e))
 
 @app.get("/api/stats")
-async def get_stats():
+def get_stats():
     total_docs = len(registry.list_documents())
     total_chunks = retriever.collection.count()
     return {"total_documents": total_docs, "total_chunks": total_chunks}
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_ui():
+def serve_ui():
     return HTML_CONTENT
 
 HTML_CONTENT = """<!DOCTYPE html>
@@ -132,7 +132,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             overflow: hidden;
         }
 
-        /* CENTERED HEADER */
         header {
             background: var(--header-bg);
             backdrop-filter: blur(16px);
@@ -176,7 +175,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             font-weight: 500;
         }
 
-        /* MAIN CHAT WRAPPER */
         main {
             flex: 1;
             display: flex;
@@ -189,7 +187,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             height: calc(100vh - 85px);
         }
 
-        /* CHAT MESSAGES SCROLL CONTAINER */
         #chat-feed {
             flex: 1;
             overflow-y: auto;
@@ -208,7 +205,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             border-radius: 4px;
         }
 
-        /* WELCOME SCREEN */
         .welcome-card {
             background: var(--card-bg);
             border: 1px solid var(--card-border);
@@ -260,7 +256,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             color: #fff;
         }
 
-        /* MESSAGE BUBBLES */
         .message-row {
             display: flex;
             flex-direction: column;
@@ -321,7 +316,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             word-break: break-word;
         }
 
-        /* COLLAPSIBLE SOURCES ACCORDION (MODERN CHATBOT STYLE) */
         .sources-accordion-container {
             margin-top: 1rem;
             width: 100%;
@@ -411,7 +405,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             white-space: pre-wrap;
         }
 
-        /* CHAT INPUT CONTAINER FIXED AT BOTTOM */
         .input-bar-container {
             padding: 1rem 0;
             background: transparent;
@@ -474,7 +467,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             cursor: not-allowed;
         }
 
-        /* TYPING INDICATOR */
         .typing-indicator {
             display: flex;
             align-items: center;
@@ -501,7 +493,6 @@ HTML_CONTENT = """<!DOCTYPE html>
 </head>
 <body>
 
-    <!-- CENTERED HEADER (NO STATS PILLS, NO UNWANTED TABS) -->
     <header>
         <div class="header-brand">
             <h1>نقابة المهندسين الأردنيين</h1>
@@ -510,7 +501,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     </header>
 
     <main>
-        <!-- SCROLLABLE CHAT FEED -->
         <div id="chat-feed">
             <div class="welcome-card" id="welcome-screen">
                 <h2>أهلاً بك في المساعد الذكي لنقابة المهندسين 🤖</h2>
@@ -523,7 +513,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- FIXED BOTTOM CHAT INPUT BAR -->
         <div class="input-bar-container">
             <form class="input-form" id="chat-form" onsubmit="handleSend(event)">
                 <input type="text" id="user-input" placeholder="اكتب سؤالك هنا باللغة العربية، اللهجة الأردنية، أو الإنجليزية..." autocomplete="off" />
@@ -559,19 +548,15 @@ HTML_CONTENT = """<!DOCTYPE html>
             const query = inputEl.value.trim();
             if (!query) return;
 
-            // Hide welcome screen on first message
             const welcomeScreen = document.getElementById('welcome-screen');
             if (welcomeScreen) welcomeScreen.style.display = 'none';
 
-            // Append User Message to UI
             appendUserMessage(query);
             inputEl.value = '';
 
-            // Disable send button while processing
             const sendBtn = document.getElementById('send-button');
             sendBtn.disabled = true;
 
-            // Append Assistant Typing Indicator
             const typingId = appendTypingIndicator();
 
             try {
@@ -597,11 +582,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                 }
                 removeTypingIndicator(typingId);
 
-                // Update chat history memory
                 chatHistory.push({ role: 'user', content: query });
                 chatHistory.push({ role: 'assistant', content: data.answer });
 
-                // Append Assistant Response Message with Collapsible Sources
                 appendAssistantMessage(data);
 
             } catch (err) {
@@ -730,19 +713,16 @@ HTML_CONTENT = """<!DOCTYPE html>
 if __name__ == "__main__":
     import uvicorn
     import socket
-    import os
 
     def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex((host, port)) == 0
 
-    target_port = int(os.getenv("PORT", "8080"))
-    if is_port_in_use(target_port):
-        for alt_port in [8000, 8501, 5000, 8081]:
-            if not is_port_in_use(alt_port):
-                print(f"ℹ️ Port {target_port} is currently occupied by another application. Falling back to port {alt_port}.")
-                target_port = alt_port
-                break
+    target_port = 8080
+    for p in [8080, 8000, 8081, 8501, 5000]:
+        if not is_port_in_use(p):
+            target_port = p
+            break
 
-    print(f"\n🚀 Starting Guild Knowledge Base RAG Chatbot Server on http://0.0.0.0:{target_port} ...")
-    uvicorn.run("app:app", host="0.0.0.0", port=target_port, reload=True)
+    print(f"\n[INFO] Starting Guild Knowledge Base Chatbot Web Server on http://127.0.0.1:{target_port} ...")
+    uvicorn.run(app, host="127.0.0.1", port=target_port)
