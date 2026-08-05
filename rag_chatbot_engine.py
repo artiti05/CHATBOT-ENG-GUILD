@@ -13,36 +13,9 @@ except ImportError:
 
 from config.settings import (
     CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME, BGE_RERANKER_MODEL_NAME,
-    LLM_PROVIDER, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, OLLAMA_BASE_URL,
-    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL
+    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_VISION_MODEL, VLM_PROVIDER
 )
-from ingestion_pipeline import get_embedder, BaseEmbedder
-
-
-def reciprocal_rank_fusion(candidate_lists: List[List[Dict[str, Any]]], k: int = 60) -> List[Dict[str, Any]]:
-    """
-    Combines multiple ranked candidate lists using Reciprocal Rank Fusion (RRF).
-    RRF Score = sum(1 / (k + rank_i))
-    """
-    scores: Dict[str, float] = {}
-    chunk_map: Dict[str, Dict[str, Any]] = {}
-
-    for c_list in candidate_lists:
-        for rank, candidate in enumerate(c_list, start=1):
-            cid = candidate.get("metadata", {}).get("chunk_id") or candidate.get("text", "")[:50]
-            if cid not in chunk_map:
-                chunk_map[cid] = candidate
-            scores[cid] = scores.get(cid, 0.0) + (1.0 / (k + rank))
-
-    sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
-    fused_results = []
-    for cid in sorted_ids:
-        item = dict(chunk_map[cid])
-        item["rrf_score"] = scores[cid]
-        fused_results.append(item)
-
-    return fused_results
-
+from ingestion_pipeline import BGEM3Embedder
 
 # ---------------------------------------------------------------------------
 # 1. BGE CROSS-ENCODER RERANKER LAYER
@@ -91,10 +64,10 @@ class BGEReranker:
 # 2. HYBRID VECTOR SEARCH KNOWLEDGE RETRIEVER
 # ---------------------------------------------------------------------------
 class KnowledgeRetriever:
-    def __init__(self, embedder: Optional[BaseEmbedder] = None):
+    def __init__(self):
         self.client = chromadb.PersistentClient(path=str(CHROMA_PERSIST_DIR), settings=ChromaSettings(anonymized_telemetry=False))
         self.collection = self.client.get_or_create_collection(name=CHROMA_COLLECTION_NAME)
-        self.embedder = embedder or get_embedder()
+        self.embedder = BGEM3Embedder()
         self.reranker = BGEReranker()
 
     def retrieve(self, query_text: str, top_k: int = 10) -> List[Dict[str, Any]]:
@@ -120,13 +93,11 @@ class KnowledgeRetriever:
                 dist = dists[i]
                 sim_pct = int(max(0.0, (1.0 - dist)) * 100)
                 meta = metas[i] if i < len(metas) else {}
-                sec = meta.get("section", "")
-                sec_title = f"قسم: {sec} (جزء {meta.get('chunk_index', 1)})" if sec and sec != "General" else f"جزء {meta.get('chunk_index', 1)}"
 
                 candidates.append({
                     "text": docs[i],
                     "title": meta.get("file_name", "وثيقة"),
-                    "section_title": sec_title,
+                    "section_title": f"جزء {meta.get('chunk_index', 1)}",
                     "similarity_score": sim_pct,
                     "distance": dist,
                     "metadata": meta
@@ -134,29 +105,15 @@ class KnowledgeRetriever:
 
         return self.reranker.rerank(query_text, candidates, top_k=top_k)
 
-    def get_chunks_by_ids(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
-        if not chunk_ids:
-            return []
-        try:
-            res = self.collection.get(ids=chunk_ids, include=["documents", "metadatas"])
-            chunks = []
-            if res and res.get("documents"):
-                docs = res["documents"]
-                metas = res["metadatas"]
-                for i in range(len(docs)):
-                    meta = metas[i] if i < len(metas) else {}
-                    sec = meta.get("section", "")
-                    sec_title = f"قسم: {sec} (جزء {meta.get('chunk_index', 1)})" if sec and sec != "General" else f"جزء {meta.get('chunk_index', 1)}"
-                    chunks.append({
-                        "chunk_id": chunk_ids[i],
-                        "text": docs[i],
-                        "title": meta.get("file_name", "وثيقة"),
-                        "section_title": sec_title,
-                        "metadata": meta
-                    })
-            return chunks
-        except Exception:
-            return []
+def clean_formatting(text: str) -> str:
+    """Strips markdown bold/italic asterisks (**text**) and header hashes to deliver clean presentation text."""
+    if not text:
+        return ""
+    # Strip markdown bold/italic asterisks: **text** -> text, *text* -> text
+    cleaned = re.sub(r'\*+', '', text)
+    # Strip markdown headers like ### -> clean text
+    cleaned = re.sub(r'^#+\s*', '', cleaned, flags=re.MULTILINE)
+    return cleaned.strip()
 
 # ---------------------------------------------------------------------------
 # 3. CONSOLIDATED RAG & DIALECT CHATBOT ENGINE
@@ -164,20 +121,39 @@ class KnowledgeRetriever:
 class RAGChatbot:
     def __init__(self):
         self.retriever = KnowledgeRetriever()
-        self.provider = LLM_PROVIDER.lower()
+        self.provider = (VLM_PROVIDER or "ollama").lower()
         self.ollama_url = OLLAMA_URL
-        self.ollama_model = OLLAMA_CHAT_MODEL
+        self.ollama_model = OLLAMA_VISION_MODEL
         self.lmstudio_url = f"{LMSTUDIO_BASE_URL.rstrip('/')}/chat/completions"
         self.lmstudio_model = LMSTUDIO_CHAT_MODEL
 
     def detect_and_normalize_query(self, query: str) -> Tuple[str, str]:
         q = query.strip()
-        if re.search(r'[a-zA-Z]{3,}', q) and not re.search(r'[\u0600-\u06FF]', q):
-            return q, "english"
 
+        # 1. English detection & MSA normalization for vector retrieval
+        if re.search(r'[a-zA-Z]{3,}', q) and not re.search(r'[\u0600-\u06FF]', q):
+            english_msa_map = {
+                "registration": "التسجيل في نقابة المهندسين",
+                "requirements": "شروط ومتطلبات التسجيل",
+                "insurance": "التأمين الصحي والأطباء",
+                "pension": "صندوق التقاعد والاستعلام",
+                "services": "الخدمات الإلكترونية والمساندة",
+                "loans": "الاستعلام عن القروض",
+                "fees": "الرسوم والاشتراكات"
+            }
+            normalized_terms = []
+            lower_q = q.lower()
+            for eng_kw, msa_trans in english_msa_map.items():
+                if eng_kw in lower_q:
+                    normalized_terms.append(msa_trans)
+            
+            normalized_search = " ".join(normalized_terms) if normalized_terms else q
+            return normalized_search, "english"
+
+        # 2. Jordanian Dialect detection & MSA normalization
         jordanian_keywords = [
             "شو", "بدي", "عشان", "عشانك", "كيف بقدر", "وين", "قديش", "ايش", 
-            "بصير", "يلي", "ليش", "هون", "هناك", "عم بدرس", "حبيت اعرف", "اسجل", "شباب"
+            "بصير", "يلي", "ليش", "هون", "هناك", "عم بدرس", "حبيت اعرف", "اسجل", "شباب", "الاوراق", "الأوراق"
         ]
 
         if any(re.search(r'\b' + re.escape(kw) + r'\b', q) for kw in jordanian_keywords):
@@ -185,7 +161,8 @@ class RAGChatbot:
             replacements = {
                 "شو هي": "ما هي", "شو الاوراق": "الوثائق والمستندات", "شو الأوراق": "الوثائق والمستندات",
                 "شو": "ما هي", "بدي أسجل": "التسجيل في النقابة", "بدي اسجل": "التسجيل في النقابة",
-                "بدي": "أريد", "عشان": "من أجل", "قديش": "ما قيمة", "كيف بقدر": "كيفية", "وين": "مكان"
+                "بدي": "أريد", "عشان": "من أجل", "قديش": "ما قيمة", "كيف بقدر": "كيفية", "وين": "مكان",
+                "ايش": "ما هي", "حبيت اعرف": "أستفسر عن"
             }
             for k, v in replacements.items():
                 normalized_search = normalized_search.replace(k, v)
@@ -199,9 +176,9 @@ class RAGChatbot:
             return {"query": query, "answer": "الرجاء إدخال سؤال للبحث والإجابة.", "sources": [], "time_taken": 0.0}
 
         normalized_query, detected_accent = self.detect_and_normalize_query(query)
-        raw_sources = self.retriever.retrieve(query_text=normalized_query, top_k=top_k)
+        sources = self.retriever.retrieve(query_text=normalized_query, top_k=top_k)
 
-        if not raw_sources:
+        if not sources:
             fallback_msg = {
                 "jordanian": "للأسف ما لقيت وثائق أو معلومات مباشرة بتخص سؤالك بقاعدة المعرفة حالياً.",
                 "english": "Sorry, no relevant documents or sources were found in the knowledge base.",
@@ -209,60 +186,20 @@ class RAGChatbot:
             }
             return {"query": query, "answer": fallback_msg.get(detected_accent, fallback_msg["msa"]), "sources": [], "time_taken": round(time.time() - start_time, 2)}
 
-        # Stage 10 — Retrieval Order Preservation & Consecutive Chunk Merging
-        grouped_docs: Dict[str, List[Dict[str, Any]]] = {}
-        for src in raw_sources:
-            src_key = src.get("metadata", {}).get("source_id") or src.get("title", "doc")
-            if src_key not in grouped_docs:
-                grouped_docs[src_key] = []
-            grouped_docs[src_key].append(src)
-
-        sources = []
         context_blocks = []
-        global_rank = 1
+        for src in sources:
+            rank = src.get("rank", 1)
+            title = src.get("title", "وثيقة")
+            section = src.get("section_title", "")
+            score = src.get("similarity_score", 0.0)
+            raw_text = src.get("text", "").strip()
+            text_snippet = raw_text[:400] + "..." if len(raw_text) > 400 else raw_text
 
-        for src_key, doc_chunks in grouped_docs.items():
-            sorted_chunks = sorted(
-                doc_chunks,
-                key=lambda x: int(x.get("metadata", {}).get("chunk_index", 1))
-            )
-
-            merged_groups: List[List[Dict[str, Any]]] = []
-            curr_group: List[Dict[str, Any]] = []
-            for ch in sorted_chunks:
-                if not curr_group:
-                    curr_group.append(ch)
-                else:
-                    prev_idx = int(curr_group[-1].get("metadata", {}).get("chunk_index", -1))
-                    curr_idx = int(ch.get("metadata", {}).get("chunk_index", -2))
-                    if curr_idx == prev_idx + 1:
-                        curr_group.append(ch)
-                    else:
-                        merged_groups.append(curr_group)
-                        curr_group = [ch]
-            if curr_group:
-                merged_groups.append(curr_group)
-
-            for group in merged_groups:
-                first_src = dict(group[0])
-                merged_text = "\n\n".join(c.get("text", "").strip() for c in group)
-                title = first_src.get("title", "وثيقة")
-                sec_name = first_src.get("metadata", {}).get("section", "")
-                chunk_indices = ", ".join(str(c.get("metadata", {}).get("chunk_index", 1)) for c in group)
-                score = max(c.get("similarity_score", 0.0) for c in group)
-
-                header = f"[المصدر {global_rank}] {title}"
-                if sec_name and sec_name != "General":
-                    header += f" — قسم: {sec_name}"
-                header += f" (الأجزاء: {chunk_indices} | نسبة التطابق: {score}%)"
-
-                context_blocks.append(f"{header}\n{merged_text}\n")
-
-                first_src["rank"] = global_rank
-                first_src["text"] = merged_text
-                first_src["section_title"] = f"قسم: {sec_name} (أجزاء {chunk_indices})" if sec_name else f"أجزاء {chunk_indices}"
-                sources.append(first_src)
-                global_rank += 1
+            header = f"[المصدر {rank}] {title}"
+            if section:
+                header += f" — {section}"
+            header += f" (نسبة التطابق: {score}%)"
+            context_blocks.append(f"{header}\n{text_snippet}\n")
 
         context_str = "\n" + ("=" * 50) + "\n" + "\n".join(context_blocks) + ("=" * 50)
 
@@ -276,19 +213,21 @@ class RAGChatbot:
 
         accent_instruction = ""
         if detected_accent == "jordanian":
-            accent_instruction = "5. المستخدم سأل باللهجة الأردنية. صغ الإجابة النهائية باللهجة الأردنية النقابية الودية والواضحة."
+            accent_instruction = "6. المستخدم سأل باللهجة الأردنية. صغ الإجابة النهائية باللهجة الأردنية النقابية الودية والواضحة."
         elif detected_accent == "english":
-            accent_instruction = "5. The user asked in English. Provide the final response in clear professional English."
+            accent_instruction = "6. The user asked in English. Provide the final response in clear professional English."
         else:
-            accent_instruction = "5. صغ الإجابة باللغة العربية الفصحى الرسمية السليمة."
+            accent_instruction = "6. صغ الإجابة باللغة العربية الفصحى الرسمية السليمة."
 
         system_prompt = (
             "أنت مساعد ذكي مخصص لنقابة المهندسين الأردنيين (Jordan Engineers Association).\n"
             "مهمتك هي الإجابة عن سؤال المستخدم بدقة وموضوعية اعتماداً حصرياً على المصادر العشرة المرفقة أدناه.\n"
-            "تعليمات هامة:\n"
+            "تعليمات التنسيق الهامة:\n"
             "1. استخرج المعلومات المباشرة والإحصائيات والأنظمة والتعليمات ذات الصلة بالسؤال.\n"
             "2. اذكر المصادر المستخدمة في إجابتك باستخدام التنسيق [المصدر N: اسم الوثيقة].\n"
             "3. لا تخترع أو تتكهن بأي معلومات غير موجودة في المصادر.\n"
+            "4. يمنع منعاً باتاً استخدام رموز النجوم Markdown (مثل **نص** أو *نص*) في الإجابة إطلاقاً. اكتب العناوين والقوائم بنقاط وأرقام نظيفة وواضحة بدون أي نجوم.\n"
+            "5. صغ القوائم بشكل نظيف ومقروء مثل: 1. اسم الخدمة: التوضيح الشامل.\n"
             f"{accent_instruction}"
         )
 
@@ -297,12 +236,13 @@ class RAGChatbot:
         generated_answer = ""
         llm_success = False
 
-        # Direct Ollama call (Primary Default)
+        # Direct Ollama API Call (Primary Default)
         if self.provider == "ollama" or not llm_success:
-            for model_to_try in [self.ollama_model, OLLAMA_VISION_MODEL]:
+            models_to_try = [self.ollama_model, "qwen2.5:7b", "qwen2.5vl:7b", "qwen2.5-vl:7b"]
+            for model_tag in models_to_try:
                 try:
                     ollama_payload = {
-                        "model": model_to_try,
+                        "model": model_tag,
                         "prompt": full_prompt,
                         "stream": False,
                         "options": {
@@ -310,18 +250,17 @@ class RAGChatbot:
                             "num_predict": 1500,
                         }
                     }
-                    res = requests.post(self.ollama_url, json=ollama_payload, timeout=60)
+                    res = requests.post(self.ollama_url, json=ollama_payload, timeout=(3.0, 30.0))
                     if res.status_code == 200:
-                        data = res.json()
-                        content = data.get("response", "").strip()
+                        content = res.json().get("response", "").strip()
                         if content:
                             generated_answer = content
                             llm_success = True
                             break
                 except Exception as o_err:
-                    print(f"[RAG Chatbot Warning] Ollama call ({model_to_try}) failed: {o_err}")
+                    print(f"[RAG Chatbot Warning] Ollama call ('{model_tag}') failed: {o_err}")
 
-        # Secondary fallback if LM Studio is explicitly requested
+        # Secondary fallback if LM Studio is explicitly requested or Ollama call failed
         if not llm_success and self.provider == "lmstudio":
             try:
                 payload = {
@@ -330,7 +269,7 @@ class RAGChatbot:
                     "temperature": 0.3,
                     "max_tokens": 1500
                 }
-                res = requests.post(self.lmstudio_url, json=payload, timeout=15)
+                res = requests.post(self.lmstudio_url, json=payload, timeout=(3.0, 30.0))
                 if res.status_code == 200:
                     choices = res.json().get("choices", [])
                     if choices:
@@ -344,16 +283,18 @@ class RAGChatbot:
         if not llm_success:
             generated_answer = (
                 "تم استخراج أهم المصادر ذات صلة بسؤالك من قاعدة المعرفة. "
-                "(ملاحظة: خادم التوليد Ollama غير متصل حالياً للتوليد المباشر، يمكنك الاطلاع على المصادر أدناه):"
+                "(ملاحظة: خادم التوليد المحلي Ollama غير متصل حالياً للتوليد المباشر، يمكنك الاطلاع على المصادر أدناه):"
             )
+
+        # Apply post-processing cleaner to guarantee zero markdown star artifacts (**text**)
+        clean_answer = clean_formatting(generated_answer)
 
         return {
             "query": query,
             "normalized_query": normalized_query,
             "detected_accent": detected_accent,
-            "answer": generated_answer,
+            "answer": clean_answer,
             "sources": sources,
             "llm_connected": llm_success,
             "time_taken": round(time.time() - start_time, 2)
         }
-
