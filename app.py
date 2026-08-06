@@ -46,7 +46,7 @@ registry = DocumentRegistry()
 
 class SearchRequest(BaseModel):
     query: str
-    top_k: int = 10
+    top_k: int = 15
 
 class ChatMessage(BaseModel):
     role: str
@@ -55,7 +55,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     query: str
     history: Optional[List[ChatMessage]] = []
-    top_k: int = 10
+    top_k: int = 15
 
 @app.post("/api/search")
 async def search_documents(req: SearchRequest, _=Security(verify_key)):
@@ -660,7 +660,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 sourcesHtml = `
                     <div class="sources-accordion-container">
                         <button class="sources-toggle-btn" onclick="toggleSources('${msgId}')" id="btn-${msgId}">
-                            <span>📚 المصادر العشرة المعتمدة (${data.sources.length} مصادر)</span>
+                            <span>📚 المصادر المعتمدة (${data.sources.length} مصادر)</span>
                             <span class="arrow">▼</span>
                         </button>
                         <div class="sources-list" id="list-${msgId}">

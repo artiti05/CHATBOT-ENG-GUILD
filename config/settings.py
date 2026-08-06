@@ -33,13 +33,13 @@ BGE_M3_MODEL_NAME = "BAAI/bge-m3"
 BGE_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 USE_FP16 = True
 
-# Chunking settings (Enhanced Semantic Chunking)
-TARGET_CHUNK_WORDS = 700
-MIN_CHUNK_WORDS = 500
-MAX_CHUNK_WORDS = 900
+# Chunking settings (550 Token Chunks ~ 380-420 Words for stronger BGE reranker matches)
+CHUNK_SIZE_TOKENS = 550
+TARGET_CHUNK_WORDS = 400
+MIN_CHUNK_WORDS = 250
+MAX_CHUNK_WORDS = 650
 OVERLAP_SENTENCES = 2
-CHUNK_SIZE_TOKENS = TARGET_CHUNK_WORDS
-CHUNK_OVERLAP_TOKENS = 50
+CHUNK_OVERLAP_TOKENS = 60
 
 # Web Crawler settings
 CRAWL_CACHE_DIR = STORAGE_DIR / "crawler_cache"
@@ -50,7 +50,7 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # "ollama" or "lmstudio"
 VLM_PROVIDER = os.getenv("VLM_PROVIDER", "ollama")  # "ollama" or "lmstudio" or "mock"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
-OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "ministral-3:8b")
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
 LMSTUDIO_CHAT_MODEL = os.getenv("LMSTUDIO_CHAT_MODEL", "jais-adapted-7b-chat")

@@ -132,20 +132,25 @@ The system ingests three primary types of knowledge sources:
 
 ### CLI Ingestion Commands
 
-* **Ingest Text Knowledge Base (`texts/`):**
+* **Ingest Knowledge Base (`texts/` + `output_dir/` Markdown, Skips `pdfs/`):**
+  ```powershell
+  python main.py ingest-kb
+  ```
+  *(Add `--no-reset-db` to append without wiping existing vectors)*.
+
+* **Ingest Text Knowledge Base (`texts/` Only):**
   ```powershell
   python main.py ingest-texts --no-reset-db
   ```
-  *(Omit `--no-reset-db` if you want to wipe the vector store and start fresh)*.
 
-* **Ingest PDF Documents (`pdfs/`):**
+* **Ingest Pre-Parsed Markdown (`output_dir/` Only):**
   ```powershell
-  python main.py ingest-pdfs --no-reset-db
+  python main.py ingest-markdown --no-reset-db
   ```
 
-* **Ingest Pre-Parsed Markdown (`output_dir/`):**
+* **Ingest PDF Documents (`pdfs/` Only):**
   ```powershell
-  python main.py ingest-markdown
+  python main.py ingest-pdfs --no-reset-db
   ```
 
 * **Full End-to-End Ingestion (All Sources):**
@@ -342,10 +347,10 @@ except requests.exceptions.RequestException as e:
 | :--- | :--- | :--- |
 | `QWEN_EMBEDDING_MODEL_NAME` | `Alibaba-NLP/gte-Qwen2-1.5B-instruct` | Dense vector embedding model |
 | `BGE_RERANKER_MODEL_NAME` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranking model |
-| `OLLAMA_CHAT_MODEL` | `qwen2.5:7b` | Ollama LLM for conversational responses |
+| `OLLAMA_CHAT_MODEL` | `qwen2.5:7b` | Primary Ollama LLM for conversational responses |
 | `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Ollama VLM for Arabic PDF visual table parsing |
-| `TARGET_CHUNK_WORDS` | `700` | Target word count per document chunk |
-| `CHUNK_OVERLAP_TOKENS` | `50` | Token overlap for chunk boundaries |
+| `CHUNK_SIZE_TOKENS` | `300` | Target chunk size (300 tokens ~ 200–220 words) |
+| `CHUNK_OVERLAP_TOKENS` | `40` | Token overlap for chunk boundaries |
 
 ---
 

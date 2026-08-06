@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import requests
@@ -13,7 +14,7 @@ except ImportError:
 
 from config.settings import (
     CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME, BGE_RERANKER_MODEL_NAME,
-    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_VISION_MODEL, VLM_PROVIDER
+    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, VLM_PROVIDER
 )
 from ingestion_pipeline import BGEM3Embedder
 
@@ -50,8 +51,10 @@ class BGEReranker:
         scores = self.model.predict(pairs)
 
         for i, score in enumerate(scores):
-            candidate_chunks[i]["rerank_score"] = float(score)
-            match_pct = min(max(int((float(score) + 4.0) / 8.0 * 100), 50), 99)
+            raw = float(score)
+            candidate_chunks[i]["rerank_score"] = raw
+            # Normalize BGE score: typical range [-5, 10] → 0-100%, no artificial floor
+            match_pct = min(max(int((raw + 5.0) / 15.0 * 100), 0), 99)
             candidate_chunks[i]["similarity_score"] = match_pct
 
         ranked_chunks = sorted(candidate_chunks, key=lambda x: x.get("rerank_score", 0.0), reverse=True)
@@ -123,7 +126,7 @@ class RAGChatbot:
         self.retriever = KnowledgeRetriever()
         self.provider = (VLM_PROVIDER or "ollama").lower()
         self.ollama_url = OLLAMA_URL
-        self.ollama_model = OLLAMA_VISION_MODEL
+        self.ollama_model = OLLAMA_CHAT_MODEL
         self.lmstudio_url = f"{LMSTUDIO_BASE_URL.rstrip('/')}/chat/completions"
         self.lmstudio_model = LMSTUDIO_CHAT_MODEL
 
@@ -170,7 +173,7 @@ class RAGChatbot:
 
         return q, "msa"
 
-    def answer_question(self, query: str, history: Optional[List[Dict[str, str]]] = None, top_k: int = 10) -> Dict[str, Any]:
+    def answer_question(self, query: str, history: Optional[List[Dict[str, str]]] = None, top_k: int = 15) -> Dict[str, Any]:
         start_time = time.time()
         if not query or not query.strip():
             return {"query": query, "answer": "الرجاء إدخال سؤال للبحث والإجابة.", "sources": [], "time_taken": 0.0}
@@ -186,20 +189,47 @@ class RAGChatbot:
             }
             return {"query": query, "answer": fallback_msg.get(detected_accent, fallback_msg["msa"]), "sources": [], "time_taken": round(time.time() - start_time, 2)}
 
+        # Dynamic Context Window Exploitation — only include sources above relevance threshold
+        # Note: With 300-token chunks, BGE reranker scores cluster around 33-39% for good matches.
+        # A threshold of 28% filters truly irrelevant noise (raw BGE score < -0.8) while keeping real results.
+        RELEVANCE_THRESHOLD = 28  # Min similarity % to include a source
+        MAX_CONTEXT_CHARS = 12000
+
         context_blocks = []
+        accumulated_chars = 0
+        included_sources = []
+
         for src in sources:
-            rank = src.get("rank", 1)
+            score = src.get("similarity_score", 0)
+            if score < RELEVANCE_THRESHOLD:
+                continue  # Skip weak/irrelevant chunks
+
+            rank = src.get("rank", len(included_sources) + 1)
             title = src.get("title", "وثيقة")
             section = src.get("section_title", "")
-            score = src.get("similarity_score", 0.0)
             raw_text = src.get("text", "").strip()
-            text_snippet = raw_text[:400] + "..." if len(raw_text) > 400 else raw_text
 
             header = f"[المصدر {rank}] {title}"
             if section:
                 header += f" — {section}"
             header += f" (نسبة التطابق: {score}%)"
-            context_blocks.append(f"{header}\n{text_snippet}\n")
+
+            block_str = f"{header}\n{raw_text}\n"
+            if accumulated_chars + len(block_str) > MAX_CONTEXT_CHARS and context_blocks:
+                break
+
+            context_blocks.append(block_str)
+            accumulated_chars += len(block_str)
+            included_sources.append(src)
+
+        # If ALL sources are below threshold, return honest no-results response
+        if not included_sources:
+            no_info_msg = {
+                "jordanian": "ما عندي معلومات كافية في قاعدة المعرفة تخص هاد السؤال. تواصل مع نقابة المهندسين مباشرة للاستفسار.",
+                "english": "I could not find sufficient information in the knowledge base for this question. Please contact the Jordan Engineers Association directly.",
+                "msa": "لا تتوفر معلومات كافية في قاعدة المعرفة للإجابة على هذا السؤال بدقة. يُرجى التواصل مع نقابة المهندسين الأردنيين مباشرة."
+            }
+            return {"query": query, "answer": no_info_msg.get(detected_accent, no_info_msg["msa"]), "sources": [], "llm_connected": False, "time_taken": round(time.time() - start_time, 2)}
 
         context_str = "\n" + ("=" * 50) + "\n" + "\n".join(context_blocks) + ("=" * 50)
 
@@ -211,34 +241,77 @@ class RAGChatbot:
                 hist_lines.append(f"{role}: {h.get('content', '')}")
             history_str = "\nسياق المحادثة السابقة:\n" + "\n".join(hist_lines) + "\n"
 
-        accent_instruction = ""
+        # --- Dynamic language & tone instruction ---
         if detected_accent == "jordanian":
-            accent_instruction = "6. المستخدم سأل باللهجة الأردنية. صغ الإجابة النهائية باللهجة الأردنية النقابية الودية والواضحة."
+            lang_instruction = (
+                "لغة الإجابة: اللهجة الأردنية الودية والواضحة — خاطب المهندس بأسلوب نقابي حميمي ومتعاطف."
+            )
         elif detected_accent == "english":
-            accent_instruction = "6. The user asked in English. Provide the final response in clear professional English."
+            lang_instruction = (
+                "Response language: Clear, professional English. Use formal tone appropriate for an engineering association."
+            )
         else:
-            accent_instruction = "6. صغ الإجابة باللغة العربية الفصحى الرسمية السليمة."
+            lang_instruction = (
+                "لغة الإجابة: العربية الفصحى الرسمية — أسلوب واضح ومحترف يليق بنقابة مهنية."
+            )
 
+        # --- Dynamic query-type detection for response shaping ---
+        q_lower = query.lower()
+        is_procedural = any(kw in q_lower for kw in ["كيف", "خطوات", "إجراءات", "طريقة", "how", "steps", "process", "procedure"])
+        is_list_query = any(kw in q_lower for kw in ["ما هي", "شو هي", "what are", "اذكر", "قائمة", "list"])
+        is_fee_query  = any(kw in q_lower for kw in ["رسوم", "اشتراك", "قسط", "تكلفة", "كم", "قديش", "fee", "cost", "price"])
+        is_eligibility = any(kw in q_lower for kw in ["شروط", "متطلبات", "من يحق", "يستحق", "eligib", "require", "condition"])
+
+        if is_procedural:
+            response_shape = "قدّم الإجابة كخطوات مرقمة واضحة ومتسلسلة."
+        elif is_list_query:
+            response_shape = "قدّم الإجابة كقائمة نقطية منظمة، بند واحد لكل عنصر."
+        elif is_fee_query:
+            response_shape = "قدّم جميع المبالغ والرسوم في جدول أو قائمة مرقمة واضحة مع ذكر الشرائح إن وجدت."
+        elif is_eligibility:
+            response_shape = "وضّح الشروط والمتطلبات في قائمة مرقمة، مع تمييز الشروط الإلزامية عن الاختيارية."
+        else:
+            response_shape = "قدّم الإجابة في فقرات موجزة ومنظمة تجيب مباشرة على السؤال."
+
+        # --- Robust system prompt: reasoning synthesizer ---
+        num_sources = len(included_sources)
         system_prompt = (
-            "أنت مساعد ذكي مخصص لنقابة المهندسين الأردنيين (Jordan Engineers Association).\n"
-            "مهمتك هي الإجابة عن سؤال المستخدم بدقة وموضوعية اعتماداً حصرياً على المصادر العشرة المرفقة أدناه.\n"
-            "تعليمات التنسيق الهامة:\n"
-            "1. استخرج المعلومات المباشرة والإحصائيات والأنظمة والتعليمات ذات الصلة بالسؤال.\n"
-            "2. اذكر المصادر المستخدمة في إجابتك باستخدام التنسيق [المصدر N: اسم الوثيقة].\n"
-            "3. لا تخترع أو تتكهن بأي معلومات غير موجودة في المصادر.\n"
-            "4. يمنع منعاً باتاً استخدام رموز النجوم Markdown (مثل **نص** أو *نص*) في الإجابة إطلاقاً. اكتب العناوين والقوائم بنقاط وأرقام نظيفة وواضحة بدون أي نجوم.\n"
-            "5. صغ القوائم بشكل نظيف ومقروء مثل: 1. اسم الخدمة: التوضيح الشامل.\n"
-            f"{accent_instruction}"
+            f"أنت مساعد ذكي متخصص في شؤون نقابة المهندسين الأردنيين (Jordan Engineers Association — JEA).\n"
+            f"مهمتك: قراءة المصادر المرفقة بعناية، استيعابها، والإجابة بطريقة تركيبية منطقية.\n"
+            f"لديك {num_sources} مصدر من قاعدة المعرفة لهذا السؤال.\n"
+            f"\n"
+            f"أسلوب الإجابة المطلوب:\n"
+            f"• ابدأ بجملة تمهيدية واحدة موجزة تحدد محور الإجابة.\n"
+            f"• اقرأ جميع المصادر واستخلص كل المعلومات ذات الصلة بالسؤال.\n"
+            f"• اربط المعلومات من مصادر مختلفة إن تكاملت، واذكر رقم المصدر [المصدر N] عند كل معلومة.\n"
+            f"• إذا كانت صياغة المصدر تقنية أو غير واضحة، وضّحها بلغة بسيطة — لكن لا تضف أي فكرة من خارج المصادر.\n"
+            f"• اختم بجملة خاتمة تلخّص الفكرة الرئيسية أو توجّه المستخدم للخطوة التالية عند الحاجة.\n"
+            f"\n"
+            f"قواعد صارمة:\n"
+            f"1. لا تخترع أي معلومة. كل فكرة يجب أن تكون موجودة في المصادر المرفقة.\n"
+            f"2. إذا لم تجد إجابة في المصادر، قل ذلك صراحةً بدلاً من التكهن.\n"
+            f"3. يُحظر استخدام رموز Markdown (* أو ** أو ##). استخدم الأرقام والنقاط النصية فقط.\n"
+            f"4. {response_shape}\n"
+            f"5. {lang_instruction}\n"
         )
 
-        full_prompt = f"{system_prompt}\n\n{history_str}سؤال المستخدم الحالي: {query}\n\nالمصادر العشرة المتاحة (Top 10 Sources):\n{context_str}"
+        full_prompt = (
+            f"{system_prompt}\n"
+            f"{'=' * 60}\n"
+            f"{history_str}"
+            f"سؤال المستخدم: {query}\n"
+            f"{'=' * 60}\n"
+            f"المصادر من قاعدة المعرفة:\n{context_str}\n"
+            f"{'=' * 60}\n"
+            f"الإجابة:"
+        )
 
         generated_answer = ""
         llm_success = False
 
         # Direct Ollama API Call (Primary Default)
         if self.provider == "ollama" or not llm_success:
-            models_to_try = [self.ollama_model, "qwen2.5:7b", "qwen2.5vl:7b", "qwen2.5-vl:7b"]
+            models_to_try = [self.ollama_model, "ministral-3:8b", "qwen2.5:7b", "ministral-3:3b-instruct-2512-q4_K_M", "qwen2.5vl:7b"]
             for model_tag in models_to_try:
                 try:
                     ollama_payload = {
@@ -246,16 +319,17 @@ class RAGChatbot:
                         "prompt": full_prompt,
                         "stream": False,
                         "options": {
-                            "temperature": 0.3,
-                            "num_predict": 1500,
+                            "temperature": 0.1,
+                            "num_predict": 2000,
                         }
                     }
-                    res = requests.post(self.ollama_url, json=ollama_payload, timeout=(3.0, 30.0))
+                    res = requests.post(self.ollama_url, json=ollama_payload, timeout=(3.0, 45.0))
                     if res.status_code == 200:
                         content = res.json().get("response", "").strip()
                         if content:
                             generated_answer = content
                             llm_success = True
+                            print(f"[RAG Chatbot] Successfully generated answer using Ollama model '{model_tag}'.")
                             break
                 except Exception as o_err:
                     print(f"[RAG Chatbot Warning] Ollama call ('{model_tag}') failed: {o_err}")
@@ -266,7 +340,7 @@ class RAGChatbot:
                 payload = {
                     "model": self.lmstudio_model,
                     "messages": [{"role": "user", "content": full_prompt}],
-                    "temperature": 0.3,
+                    "temperature": 0.1,
                     "max_tokens": 1500
                 }
                 res = requests.post(self.lmstudio_url, json=payload, timeout=(3.0, 30.0))
@@ -294,7 +368,7 @@ class RAGChatbot:
             "normalized_query": normalized_query,
             "detected_accent": detected_accent,
             "answer": clean_answer,
-            "sources": sources,
+            "sources": included_sources,
             "llm_connected": llm_success,
             "time_taken": round(time.time() - start_time, 2)
         }
