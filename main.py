@@ -69,9 +69,9 @@ def run_server(port: int = 8000):
 def run_ingest_texts(args):
     """Ingests text files from texts/ directory into vector database."""
     from batch_ingest import reset_storage_db, index_texts_directory
-    from ingestion_pipeline import IngestionPipeline
-    from crawler_admin import DocumentRegistry
-    from config.settings import TEXTS_DIR
+    from core.ingestion import IngestionPipeline
+    from db.registry import DocumentRegistry
+    from core.config import TEXTS_DIR
 
     texts_dir_path = (BASE_DIR / args.texts_dir).resolve() if hasattr(args, "texts_dir") and args.texts_dir else TEXTS_DIR
 
@@ -94,9 +94,9 @@ def run_ingest_texts(args):
 def run_ingest_pdfs(args):
     """Vision parses and ingests PDF files from pdfs/ directory into vector database."""
     from batch_ingest import reset_storage_db, parse_remaining_pdfs_gpu
-    from ingestion_pipeline import IngestionPipeline
-    from crawler_admin import DocumentRegistry
-    from config.settings import PDFS_DIR
+    from core.ingestion import IngestionPipeline
+    from db.registry import DocumentRegistry
+    from core.config import PDFS_DIR
 
     pdfs_dir_path = (BASE_DIR / args.pdfs_dir).resolve() if hasattr(args, "pdfs_dir") and args.pdfs_dir else PDFS_DIR
 
@@ -119,9 +119,9 @@ def run_ingest_pdfs(args):
 def run_ingest_markdown(args):
     """Indexes pre-parsed Markdown files from output_dir/ into vector database."""
     from batch_ingest import reset_storage_db, index_preparsed_markdown_files
-    from ingestion_pipeline import IngestionPipeline
-    from crawler_admin import DocumentRegistry
-    from config.settings import PARSED_OUTPUT_DIR
+    from core.ingestion import IngestionPipeline
+    from db.registry import DocumentRegistry
+    from core.config import PARSED_OUTPUT_DIR
 
     out_dir_path = (BASE_DIR / args.output_dir).resolve() if hasattr(args, "output_dir") and args.output_dir else PARSED_OUTPUT_DIR
 
@@ -144,9 +144,9 @@ def run_ingest_markdown(args):
 def run_ingest_kb(args):
     """Ingests texts/ and output_dir/ pre-parsed Markdown files into vector database (skips pdfs/)."""
     from batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files
-    from ingestion_pipeline import IngestionPipeline
-    from crawler_admin import DocumentRegistry
-    from config.settings import TEXTS_DIR, PARSED_OUTPUT_DIR
+    from core.ingestion import IngestionPipeline
+    from db.registry import DocumentRegistry
+    from core.config import TEXTS_DIR, PARSED_OUTPUT_DIR
 
     texts_dir_path = (BASE_DIR / args.texts_dir).resolve() if hasattr(args, "texts_dir") and args.texts_dir else TEXTS_DIR
     out_dir_path = (BASE_DIR / args.output_dir).resolve() if hasattr(args, "output_dir") and args.output_dir else PARSED_OUTPUT_DIR
@@ -176,9 +176,9 @@ def run_ingest_kb(args):
 def run_ingest_all(args):
     """Runs complete ingestion (texts/ + output_dir/ + pdfs/)."""
     from batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files, parse_remaining_pdfs_gpu
-    from ingestion_pipeline import IngestionPipeline
-    from crawler_admin import DocumentRegistry
-    from config.settings import TEXTS_DIR, PDFS_DIR, PARSED_OUTPUT_DIR
+    from core.ingestion import IngestionPipeline
+    from db.registry import DocumentRegistry
+    from core.config import TEXTS_DIR, PDFS_DIR, PARSED_OUTPUT_DIR
 
     texts_dir_path = (BASE_DIR / args.texts_dir).resolve() if hasattr(args, "texts_dir") and args.texts_dir else TEXTS_DIR
     out_dir_path = (BASE_DIR / args.output_dir).resolve() if hasattr(args, "output_dir") and args.output_dir else PARSED_OUTPUT_DIR

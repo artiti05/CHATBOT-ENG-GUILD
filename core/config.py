@@ -6,8 +6,9 @@ load_dotenv()
 
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
-TEXTS_DIR = BASE_DIR / "texts"
-PDFS_DIR = BASE_DIR / "pdfs"
+TEXTS_DIR = BASE_DIR / "data" / "texts"
+PDFS_DIR = BASE_DIR / "data" / "pdfs"
+NEW_UPLOADS_DIR = BASE_DIR / "data" / "new_uploads"
 FILES_DIR = BASE_DIR / "files"
 
 # Ingestion Exclusion Flags
@@ -15,7 +16,7 @@ IGNORE_TEXTS_DIR = False
 EXCLUDE_DIRS = ["الإعلانات والأخبار", "large_pdfs_over_30_pages"]
 
 # Storage paths
-STORAGE_DIR = BASE_DIR / "storage"
+STORAGE_DIR = BASE_DIR / "data" / "storage"
 CHROMA_PERSIST_DIR = STORAGE_DIR / "chroma_db"
 REGISTRY_DB_PATH = STORAGE_DIR / "registry.db"
 

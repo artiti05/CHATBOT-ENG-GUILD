@@ -23,14 +23,14 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Add project root to path
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from config.settings import (
+from core.config import (
     STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH, TEXTS_DIR
 )
-from ingestion_pipeline import IngestionPipeline, clean_document_text
-from crawler_admin import DocumentRegistry
+from core.ingestion import IngestionPipeline, clean_document_text
+from db.registry import DocumentRegistry
 
 
 def reset_storage_db():

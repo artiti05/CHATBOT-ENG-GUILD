@@ -19,64 +19,27 @@ from typing import List, Dict, Any, Optional
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from rag_chatbot_engine import KnowledgeRetriever, RAGChatbot
-from crawler_admin import DocumentRegistry
+from core.rag_engine import KnowledgeRetriever
+from db.registry import DocumentRegistry
+from api.routes_chat import router as chat_router
+from api.routes_admin import router as admin_router
 
 app = FastAPI(title="Guild Knowledge Base RAG Chatbot UI", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else [],
-    allow_methods=["POST", "GET"],
+    allow_origins=os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else ["*"],
+    allow_methods=["POST", "GET", "DELETE"],
     allow_headers=["X-API-Key", "Content-Type"],
 )
-API_KEY = os.getenv("RAG_API_KEY", "")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-def verify_key(key: str = Security(api_key_header)):
-    if not API_KEY:
-        raise HTTPException(status_code=500, detail="RAG_API_KEY not configured on server")
-    if key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    return key
-
-retriever = KnowledgeRetriever()
-chatbot = RAGChatbot()
-registry = DocumentRegistry()
-
-class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 15
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-class ChatRequest(BaseModel):
-    query: str
-    history: Optional[List[ChatMessage]] = []
-    top_k: int = 15
-
-@app.post("/api/search")
-async def search_documents(req: SearchRequest, _=Security(verify_key)):
-    if not req.query or not req.query.strip():
-        raise HTTPException(status_code=400, detail="Query string cannot be empty.")
-    
-    results = retriever.retrieve(query_text=req.query, top_k=req.top_k)
-    return {"query": req.query, "count": len(results), "results": results}
-
-@app.post("/api/chat")
-async def chat_with_kb(req: ChatRequest, _=Security(verify_key)):
-    if not req.query or not req.query.strip():
-        raise HTTPException(status_code=400, detail="Query string cannot be empty.")
-
-    hist_dicts = [{"role": h.role, "content": h.content} for h in req.history] if req.history else []
-    response = chatbot.answer_question(query=req.query, history=hist_dicts, top_k=req.top_k)
-    return response
+app.include_router(chat_router, prefix="/api")
+app.include_router(admin_router, prefix="/api/admin")
 
 @app.get("/api/health")
 async def health():
     try:
+        retriever = KnowledgeRetriever()
         chunk_count = retriever.collection.count()
         return {"status": "ok", "chunks": chunk_count}
     except Exception as e:
@@ -84,6 +47,8 @@ async def health():
 
 @app.get("/api/stats")
 def get_stats():
+    registry = DocumentRegistry()
+    retriever = KnowledgeRetriever()
     total_docs = len(registry.list_documents())
     total_chunks = retriever.collection.count()
     return {"total_documents": total_docs, "total_chunks": total_chunks}

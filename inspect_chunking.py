@@ -15,8 +15,8 @@ if hasattr(sys.stdout, "reconfigure"):
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
-from ingestion_pipeline import TextChunker, clean_document_text
-from config.settings import (
+from core.ingestion import TextChunker, clean_document_text
+from core.config import (
     PARSED_OUTPUT_DIR, TEXTS_DIR, TARGET_CHUNK_WORDS, MIN_CHUNK_WORDS, MAX_CHUNK_WORDS, OVERLAP_SENTENCES
 )
 

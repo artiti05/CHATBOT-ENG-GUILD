@@ -3,8 +3,8 @@ import sqlite3
 import hashlib
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from config.settings import REGISTRY_DB_PATH, STORAGE_DIR, CRAWL_CACHE_DIR
-from ingestion_pipeline import IngestionPipeline
+from core.config import REGISTRY_DB_PATH, STORAGE_DIR, CRAWL_CACHE_DIR
+from core.ingestion import IngestionPipeline
 
 class DocumentRegistry:
     def __init__(self, db_path: Path = REGISTRY_DB_PATH):

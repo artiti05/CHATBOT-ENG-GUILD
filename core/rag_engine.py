@@ -12,11 +12,11 @@ try:
 except ImportError:
     HAS_RERANKER = False
 
-from config.settings import (
+from core.config import (
     CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME, BGE_RERANKER_MODEL_NAME,
     LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, VLM_PROVIDER
 )
-from ingestion_pipeline import BGEM3Embedder
+from core.ingestion import BGEM3Embedder
 
 # ---------------------------------------------------------------------------
 # 1. BGE CROSS-ENCODER RERANKER LAYER

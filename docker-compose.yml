@@ -20,7 +20,7 @@ services:
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
     volumes:
-      - ./storage:/app/storage        # persist ChromaDB + registry
+      - ./data:/app/data        # persist ChromaDB, registry, pdfs, and texts
       - hf_cache:/root/.cache/huggingface  # cache embedding models across restarts
     depends_on:
       - ollama
