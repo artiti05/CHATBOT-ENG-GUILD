@@ -14,8 +14,10 @@ except ImportError:
 
 from core.config import (
     CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME, BGE_RERANKER_MODEL_NAME,
-    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, VLM_PROVIDER
+    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, VLM_PROVIDER,
+    NUM_CTX
 )
+
 from core.ingestion import BGEM3Embedder
 
 # ---------------------------------------------------------------------------
@@ -193,7 +195,7 @@ class RAGChatbot:
         # Note: With 300-token chunks, BGE reranker scores cluster around 33-39% for good matches.
         # A threshold of 28% filters truly irrelevant noise (raw BGE score < -0.8) while keeping real results.
         RELEVANCE_THRESHOLD = 28  # Min similarity % to include a source
-        MAX_CONTEXT_CHARS = 12000
+        MAX_CONTEXT_CHARS = 9000
 
         context_blocks = []
         accumulated_chars = 0
@@ -298,10 +300,10 @@ class RAGChatbot:
         full_prompt = (
             f"{system_prompt}\n"
             f"{'=' * 60}\n"
-            f"{history_str}"
-            f"سؤال المستخدم: {query}\n"
-            f"{'=' * 60}\n"
             f"المصادر من قاعدة المعرفة:\n{context_str}\n"
+            f"{'=' * 60}\n"
+            f"{history_str}"
+            f"سؤال المستخدم (أجب عنه فقط من المصادر أعلاه): {query}\n"
             f"{'=' * 60}\n"
             f"الإجابة:"
         )
@@ -321,6 +323,7 @@ class RAGChatbot:
                         "options": {
                             "temperature": 0.1,
                             "num_predict": 2000,
+                            "num_ctx":NUM_CTX
                         }
                     }
                     res = requests.post(self.ollama_url, json=ollama_payload, timeout=(3.0, 45.0))

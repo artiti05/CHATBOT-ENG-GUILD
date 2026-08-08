@@ -23,6 +23,7 @@ from core.rag_engine import KnowledgeRetriever
 from db.registry import DocumentRegistry
 from api.routes_chat import router as chat_router
 from api.routes_admin import router as admin_router
+from api.routes_admin_ui import router as admin_ui_router
 
 app = FastAPI(title="Guild Knowledge Base RAG Chatbot UI", version="3.0.0")
 
@@ -35,6 +36,7 @@ app.add_middleware(
 
 app.include_router(chat_router, prefix="/api")
 app.include_router(admin_router, prefix="/api/admin")
+app.include_router(admin_ui_router)
 
 @app.get("/api/health")
 async def health():

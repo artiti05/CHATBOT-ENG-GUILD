@@ -62,7 +62,7 @@ def run_server(port: int = 8000):
     print(f"  - URL: http://localhost:{target_port}")
     print("=" * 65 + "\n")
 
-    from app import app
+    from api.main import app
     uvicorn.run(app, host="0.0.0.0", port=target_port)
 
 
