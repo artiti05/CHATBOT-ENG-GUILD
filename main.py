@@ -45,17 +45,31 @@ def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
         return s.connect_ex((host, port)) == 0
 
 
+def kill_port_owner(port: int = 8000):
+    """Frees target port if occupied by a stale process on Windows/Linux."""
+    if is_port_in_use(port):
+        print(f"[INFO] Freeing port {port} from stale listener process...")
+        try:
+            import subprocess, time
+            if sys.platform == "win32":
+                out = subprocess.check_output(f"netstat -ano | findstr :{port}", shell=True).decode()
+                for line in out.strip().splitlines():
+                    parts = line.strip().split()
+                    if len(parts) >= 5 and "LISTENING" in parts:
+                        pid = parts[-1]
+                        subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+                time.sleep(0.5)
+        except Exception as err:
+            print(f"[Warning] Could not auto-free port {port}: {err}")
+
+
 def run_server(port: int = 8000):
-    """Launches the FastAPI Web Server and Arabic/Jordanian AI Chatbot UI."""
+    """Launches the FastAPI Web Server and Arabic/Jordanian AI Chatbot UI on Port 8000."""
     import uvicorn
 
     target_port = port
     if is_port_in_use(target_port):
-        for alt in [8080, 8000, 8081, 8501, 5000]:
-            if not is_port_in_use(alt):
-                print(f"[INFO] Port {target_port} is occupied. Using alternative port {alt}.")
-                target_port = alt
-                break
+        kill_port_owner(target_port)
 
     print("\n" + "=" * 65)
     print(" 🚀 GUILD KNOWLEDGE BASE RAG WEB SERVER")
@@ -68,7 +82,7 @@ def run_server(port: int = 8000):
 
 def run_ingest_texts(args):
     """Ingests text files from texts/ directory into vector database."""
-    from batch_ingest import reset_storage_db, index_texts_directory
+    from scripts.batch_ingest import reset_storage_db, index_texts_directory
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
     from core.config import TEXTS_DIR
@@ -93,7 +107,7 @@ def run_ingest_texts(args):
 
 def run_ingest_pdfs(args):
     """Vision parses and ingests PDF files from pdfs/ directory into vector database."""
-    from batch_ingest import reset_storage_db, parse_remaining_pdfs_gpu
+    from scripts.batch_ingest import reset_storage_db, parse_remaining_pdfs_gpu
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
     from core.config import PDFS_DIR
@@ -118,7 +132,7 @@ def run_ingest_pdfs(args):
 
 def run_ingest_markdown(args):
     """Indexes pre-parsed Markdown files from output_dir/ into vector database."""
-    from batch_ingest import reset_storage_db, index_preparsed_markdown_files
+    from scripts.batch_ingest import reset_storage_db, index_preparsed_markdown_files
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
     from core.config import PARSED_OUTPUT_DIR
@@ -143,7 +157,7 @@ def run_ingest_markdown(args):
 
 def run_ingest_kb(args):
     """Ingests texts/ and output_dir/ pre-parsed Markdown files into vector database (skips pdfs/)."""
-    from batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files
+    from scripts.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
     from core.config import TEXTS_DIR, PARSED_OUTPUT_DIR
@@ -175,7 +189,7 @@ def run_ingest_kb(args):
 
 def run_ingest_all(args):
     """Runs complete ingestion (texts/ + output_dir/ + pdfs/)."""
-    from batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files, parse_remaining_pdfs_gpu
+    from scripts.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files, parse_remaining_pdfs_gpu
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
     from core.config import TEXTS_DIR, PDFS_DIR, PARSED_OUTPUT_DIR
@@ -205,6 +219,62 @@ def run_ingest_all(args):
     print("\n✅ Full end-to-end ingestion completed.")
 
 
+def run_terminal_chat(args=None):
+    """Runs interactive terminal CLI chat directly in the console."""
+    import json
+    from core.rag_engine import RAGChatbot
+    print("\n" + "=" * 65)
+    print(" 🤖 JORDAN ENGINEERS ASSOCIATION — TERMINAL RAG CHAT")
+    print(" Type your question and press Enter. Type 'exit' or 'q' to quit.")
+    print("=" * 65 + "\n")
+
+    bot = RAGChatbot()
+    history = []
+
+    while True:
+        try:
+            user_input = input("\n👤 سؤالك (المستخدم) > ").strip()
+            if not user_input:
+                continue
+            if user_input.lower() in ["exit", "quit", "q", "خروج"]:
+                print("\n👋 شكراً لاستخدامك المساعد الذكي. إلى اللقاء!")
+                break
+
+            print("\n🤖 [RAG Engine] يحلل المصادر ويولّد الإجابة...\n")
+
+            full_text = ""
+            sources = []
+            for chunk_str in bot.answer_question_stream(user_input, history=history):
+                if chunk_str.startswith("data: "):
+                    try:
+                        data = json.loads(chunk_str[6:].strip())
+                        if data.get("type") == "meta":
+                            sources = data.get("sources", [])
+                        elif data.get("type") == "token":
+                            token = data.get("token", "")
+                            full_text += token
+                            print(token, end="", flush=True)
+                        elif data.get("type") == "done":
+                            if data.get("answer"):
+                                full_text = data.get("answer")
+                                print(full_text, end="", flush=True)
+                    except Exception:
+                        pass
+
+            print("\n")
+            if sources:
+                print("📚 المصادر المعتمدة:")
+                for src in sources:
+                    print(f"  • [المصدر {src.get('rank', 1)}] {src.get('title', 'وثيقة')} ({src.get('similarity_score', 0)}% تطابق)")
+
+            history.append({"role": "user", "content": user_input})
+            history.append({"role": "assistant", "content": full_text})
+
+        except (KeyboardInterrupt, EOFError):
+            print("\n\n👋 خروج.")
+            break
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Jordan Engineers Association — Arabic PDF Parser & RAG Chatbot CLI",
@@ -212,6 +282,9 @@ def main():
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+
+    # Interactive Terminal Chat
+    subparsers.add_parser("chat", help="Launch interactive Terminal CLI chat directly in the console")
 
     # 1. Serve command
     serve_parser = subparsers.add_parser("serve", help="Launch FastAPI Web Chatbot UI (Default)")
@@ -265,7 +338,9 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "serve":
+    if args.command == "chat":
+        run_terminal_chat(args)
+    elif args.command == "serve":
         run_server(port=args.port)
     elif args.command == "ingest-kb":
         run_ingest_kb(args)

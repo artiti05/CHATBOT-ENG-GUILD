@@ -1,4 +1,5 @@
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -67,6 +68,8 @@ CLAHE_TILE_GRID = (8, 8)
 MIN_TABLE_AREA_FRACTION = 0.02
 TABLE_UPSCALE_FACTOR = 2.0
 TABLE_CROP_PADDING = 10
+OLLAMA_KEEP_ALIVE = -1 if os.getenv("OLLAMA_KEEP_ALIVE", "-1") == "-1" else os.getenv("OLLAMA_KEEP_ALIVE")
+
 REQUEST_TIMEOUT = 300
 NUM_CTX = 8192
 NUM_PREDICT = 4096

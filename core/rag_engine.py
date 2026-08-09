@@ -15,7 +15,7 @@ except ImportError:
 from core.config import (
     CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME, BGE_RERANKER_MODEL_NAME,
     LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, VLM_PROVIDER,
-    NUM_CTX
+    NUM_CTX, NUM_PREDICT, OLLAMA_KEEP_ALIVE
 )
 
 from core.ingestion import BGEM3Embedder
@@ -36,9 +36,14 @@ class BGEReranker:
     def _load_model(self):
         if HAS_RERANKER:
             try:
-                print(f"[Reranker] Loading BGE Reranker model '{BGE_RERANKER_MODEL_NAME}'...")
-                self.model = CrossEncoder(BGE_RERANKER_MODEL_NAME, max_length=512)
-                print("[Reranker] Successfully loaded BGE Reranker.")
+                import torch
+                # Enable multi-core CPU parallelism
+                num_cores = os.cpu_count() or 8
+                torch.set_num_threads(min(num_cores, 8))
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                print(f"[Reranker] Loading BGE Reranker model '{BGE_RERANKER_MODEL_NAME}' on {device} (threads={torch.get_num_threads()})...")
+                self.model = CrossEncoder(BGE_RERANKER_MODEL_NAME, max_length=256, device=device)
+                print(f"[Reranker] Successfully loaded BGE Reranker on {device}.")
             except Exception as e:
                 print(f"[Reranker Warning] Could not load BGE Reranker model: {e}")
                 self.model = None
@@ -49,8 +54,8 @@ class BGEReranker:
         if not self.model:
             return candidate_chunks[:top_k]
 
-        pairs = [[query, chunk.get("text", "")] for chunk in candidate_chunks]
-        scores = self.model.predict(pairs)
+        pairs = [[query, chunk.get("text", "")[:600]] for chunk in candidate_chunks]
+        scores = self.model.predict(pairs, batch_size=16, show_progress_bar=False)
 
         for i, score in enumerate(scores):
             raw = float(score)
@@ -84,7 +89,7 @@ class KnowledgeRetriever:
 
         results = self.collection.query(
             query_embeddings=[query_dense],
-            n_results=min(top_k * 3, 30), # Over-sample for cross-encoder reranking
+            n_results=min(top_k * 2, 15), # Fast candidate over-sampling for cross-encoder reranking
             include=["documents", "metadatas", "distances"]
         )
 
@@ -313,20 +318,21 @@ class RAGChatbot:
 
         # Direct Ollama API Call (Primary Default)
         if self.provider == "ollama" or not llm_success:
-            models_to_try = [self.ollama_model, "ministral-3:8b", "qwen2.5:7b", "ministral-3:3b-instruct-2512-q4_K_M", "qwen2.5vl:7b"]
+            models_to_try = [self.ollama_model, "qwen2.5:7b", "ministral-3:3b-instruct-2512-q4_K_M"]
             for model_tag in models_to_try:
                 try:
                     ollama_payload = {
                         "model": model_tag,
                         "prompt": full_prompt,
                         "stream": False,
+                        "keep_alive": OLLAMA_KEEP_ALIVE,
                         "options": {
                             "temperature": 0.1,
-                            "num_predict": 2000,
-                            "num_ctx":NUM_CTX
+                            "num_predict": NUM_PREDICT,
+                            "num_ctx": NUM_CTX
                         }
                     }
-                    res = requests.post(self.ollama_url, json=ollama_payload, timeout=(3.0, 45.0))
+                    res = requests.post(self.ollama_url, json=ollama_payload, timeout=(5.0, 300.0))
                     if res.status_code == 200:
                         content = res.json().get("response", "").strip()
                         if content:
@@ -375,3 +381,149 @@ class RAGChatbot:
             "llm_connected": llm_success,
             "time_taken": round(time.time() - start_time, 2)
         }
+
+    def answer_question_stream(self, query: str, history: Optional[List[Dict[str, str]]] = None, top_k: int = 15):
+        """Streaming generator that yields JSON chunks for SSE / real-time token rendering."""
+        import json
+        start_time = time.time()
+        if not query or not query.strip():
+            yield f"data: {json.dumps({'type': 'done', 'answer': 'الرجاء إدخال سؤال للبحث والإجابة.', 'sources': []}, ensure_ascii=False)}\n\n"
+            return
+
+        normalized_query, detected_accent = self.detect_and_normalize_query(query)
+        sources = self.retriever.retrieve(query_text=normalized_query, top_k=top_k)
+
+        if not sources:
+            fallback_msg = {
+                "jordanian": "للأسف ما لقيت وثائق أو معلومات مباشرة بتخص سؤالك بقاعدة المعرفة حالياً.",
+                "english": "Sorry, no relevant documents or sources were found in the knowledge base.",
+                "msa": "لم يتم العثور على وثائق أو مصادر مرتبطة بسؤالك في قاعدة المعرفة."
+            }
+            ans = fallback_msg.get(detected_accent, fallback_msg["msa"])
+            yield f"data: {json.dumps({'type': 'done', 'answer': ans, 'sources': [], 'time_taken': round(time.time() - start_time, 2)}, ensure_ascii=False)}\n\n"
+            return
+
+        RELEVANCE_THRESHOLD = 28
+        MAX_CONTEXT_CHARS = 9000
+
+        context_blocks = []
+        accumulated_chars = 0
+        included_sources = []
+
+        for src in sources:
+            score = src.get("similarity_score", 0)
+            if score < RELEVANCE_THRESHOLD:
+                continue
+
+            rank = src.get("rank", len(included_sources) + 1)
+            title = src.get("title", "وثيقة")
+            section = src.get("section_title", "")
+            raw_text = src.get("text", "").strip()
+
+            header = f"[المصدر {rank}] {title}"
+            if section:
+                header += f" — {section}"
+            header += f" (نسبة التطابق: {score}%)"
+
+            block_str = f"{header}\n{raw_text}\n"
+            if accumulated_chars + len(block_str) > MAX_CONTEXT_CHARS and context_blocks:
+                break
+
+            context_blocks.append(block_str)
+            accumulated_chars += len(block_str)
+            included_sources.append(src)
+
+        if not included_sources:
+            no_info_msg = {
+                "jordanian": "ما عندي معلومات كافية في قاعدة المعرفة تخص هاد السؤال. تواصل مع نقابة المهندسين مباشرة للاستفسار.",
+                "english": "I could not find sufficient information in the knowledge base for this question. Please contact the Jordan Engineers Association directly.",
+                "msa": "لا تتوفر معلومات كافية في قاعدة المعرفة للإجابة على هذا السؤال بدقة. يُرجى التواصل مع نقابة المهندسين الأردنيين مباشرة."
+            }
+            ans = no_info_msg.get(detected_accent, no_info_msg["msa"])
+            yield f"data: {json.dumps({'type': 'done', 'answer': ans, 'sources': [], 'time_taken': round(time.time() - start_time, 2)}, ensure_ascii=False)}\n\n"
+            return
+
+        # Send metadata event first
+        yield f"data: {json.dumps({'type': 'meta', 'sources': included_sources, 'detected_accent': detected_accent}, ensure_ascii=False)}\n\n"
+
+        context_str = "\n" + ("=" * 50) + "\n" + "\n".join(context_blocks) + ("=" * 50)
+
+        history_str = ""
+        if history and len(history) > 0:
+            hist_lines = []
+            for h in history[-6:]:
+                role = "المستخدم" if h.get("role") == "user" else "المساعد"
+                hist_lines.append(f"{role}: {h.get('content', '')}")
+            history_str = "\nسياق المحادثة السابقة:\n" + "\n".join(hist_lines) + "\n"
+
+        if detected_accent == "jordanian":
+            lang_instruction = "لغة الإجابة: اللهجة الأردنية الودية والواضحة — خاطب المهندس بأسلوب نقابي حميمي ومتعاطف."
+        elif detected_accent == "english":
+            lang_instruction = "Response language: Clear, professional English. Use formal tone appropriate for an engineering association."
+        else:
+            lang_instruction = "لغة الإجابة: العربية الفصحى الرسمية — أسلوب واضح ومحترف يليق بنقابة مهنية."
+
+        system_prompt = (
+            f"أنت مساعد ذكي متخصص في شؤون نقابة المهندسين الأردنيين (Jordan Engineers Association — JEA).\n"
+            f"مهمتك: قراءة المصادر المرفقة بعناية، استيعابها، والإجابة بطريقة تركيبية منطقية.\n"
+            f"لديك {len(included_sources)} مصدر من قاعدة المعرفة لهذا السؤال.\n\n"
+            f"أسلوب الإجابة المطلوب:\n"
+            f"• ابدأ بجملة تمهيدية واحدة موجزة تحدد محور الإجابة.\n"
+            f"• اقرأ جميع المصادر واستخلص كل المعلومات ذات الصلة بالسؤال.\n"
+            f"• اربط المعلومات من مصادر مختلفة إن تكاملت، واذكر رقم المصدر [المصدر N] عند كل معلومة.\n"
+            f"• اختم بجملة خاتمة تلخّص الفكرة الرئيسية أو توجّه المستخدم للخطوة التالية عند الحاجة.\n\n"
+            f"قواعد صارمة:\n"
+            f"1. لا تخترع أي معلومة. كل فكرة يجب أن تكون موجودة في المصادر المرفقة.\n"
+            f"2. إذا لم تجد إجابة في المصادر، قل ذلك صراحةً بدلاً من التكهن.\n"
+            f"3. يُحظر استخدام رموز Markdown (* أو ** أو ##). استخدم الأرقام والنقاط النصية فقط.\n"
+            f"4. {lang_instruction}\n"
+        )
+
+        full_prompt = (
+            f"{system_prompt}\n"
+            f"{'=' * 60}\n"
+            f"المصادر من قاعدة المعرفة:\n{context_str}\n"
+            f"{'=' * 60}\n"
+            f"{history_str}"
+            f"سؤال المستخدم (أجب عنه فقط من المصادر أعلاه): {query}\n"
+            f"{'=' * 60}\n"
+            f"الإجابة:"
+        )
+
+        # Stream tokens from Ollama
+        stream_success = False
+        models_to_try = [self.ollama_model, "qwen2.5:7b", "ministral-3:3b-instruct-2512-q4_K_M"]
+        for model_tag in models_to_try:
+            ollama_payload = {
+                "model": model_tag,
+                "prompt": full_prompt,
+                "stream": True,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
+                "options": {
+                    "temperature": 0.1,
+                    "num_predict": NUM_PREDICT,
+                    "num_ctx": NUM_CTX
+                }
+            }
+
+            try:
+                res = requests.post(self.ollama_url, json=ollama_payload, stream=True, timeout=(5.0, 300.0))
+                if res.status_code == 200:
+                    for line in res.iter_lines():
+                        if line:
+                            chunk = json.loads(line.decode('utf-8'))
+                            token = chunk.get("response", "")
+                            if token:
+                                token_clean = token.replace("*", "").replace("#", "")
+                                yield f"data: {json.dumps({'type': 'token', 'token': token_clean}, ensure_ascii=False)}\n\n"
+                            if chunk.get("done", False):
+                                stream_success = True
+                                break
+                    if stream_success:
+                        break
+            except Exception as e:
+                print(f"[Streaming Error] model '{model_tag}': {e}")
+
+        total_time = round(time.time() - start_time, 2)
+        yield f"data: {json.dumps({'type': 'done', 'time_taken': total_time}, ensure_ascii=False)}\n\n"
+

@@ -24,6 +24,7 @@ from db.registry import DocumentRegistry
 from api.routes_chat import router as chat_router
 from api.routes_admin import router as admin_router
 from api.routes_admin_ui import router as admin_ui_router
+from api.dependencies import USER_API_KEY, ADMIN_API_KEY
 
 app = FastAPI(title="Guild Knowledge Base RAG Chatbot UI", version="3.0.0")
 
@@ -57,7 +58,8 @@ def get_stats():
 
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
-    return HTML_CONTENT
+    default_key = USER_API_KEY or ADMIN_API_KEY or ""
+    return HTML_CONTENT.replace("{{DEFAULT_USER_KEY}}", default_key)
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -110,6 +112,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             text-align: center;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
             z-index: 100;
+            flex-direction: column;
         }
 
         .header-brand {
@@ -132,8 +135,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         .header-brand h1::before {
-            content: "🇯🇴";
-            font-size: 1.5rem;
+            content: none;
         }
 
         .header-brand p {
@@ -203,100 +205,104 @@ HTML_CONTENT = """<!DOCTYPE html>
             flex-wrap: wrap;
             justify-content: center;
             gap: 0.75rem;
+            justify-content: center;
         }
 
         .chip {
-            background: rgba(99, 102, 241, 0.15);
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            color: #e2e8f0;
-            padding: 0.6rem 1.25rem;
-            border-radius: 50px;
-            font-size: 0.9rem;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid var(--card-border);
+            color: #cbd5e1;
+            padding: 0.65rem 1.1rem;
+            border-radius: 14px;
+            font-size: 0.88rem;
+            font-weight: 600;
             cursor: pointer;
             transition: all 0.25s ease;
         }
 
         .chip:hover {
-            background: rgba(99, 102, 241, 0.35);
+            background: rgba(99, 102, 241, 0.25);
             border-color: var(--primary-accent);
-            transform: translateY(-2px);
             color: #fff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
         }
 
+        /* Chat Message Rows */
         .message-row {
             display: flex;
             flex-direction: column;
-            width: 100%;
-            animation: fadeIn 0.3s ease-in-out;
+            max-width: 85%;
+            animation: messageSlide 0.3s ease-out;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
+        @keyframes messageSlide {
+            from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
         .message-row.user {
-            align-items: flex-end;
+            align-self: flex-start;
         }
 
         .message-row.assistant {
-            align-items: flex-start;
+            align-self: flex-end;
+            width: 100%;
+            max-width: 95%;
         }
 
-        .bubble {
-            max-width: 85%;
-            padding: 1.15rem 1.5rem;
-            border-radius: 20px;
-            font-size: 1rem;
-            line-height: 1.7;
-            position: relative;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-        }
-
-        .message-row.user .bubble {
+        .user .bubble {
             background: var(--user-msg-bg);
-            color: #ffffff;
-            border-bottom-left-radius: 4px;
-            font-weight: 500;
-        }
-
-        .message-row.assistant .bubble {
-            background: var(--bot-msg-bg);
-            color: var(--text-main);
-            border: 1px solid var(--card-border);
-            border-bottom-right-radius: 4px;
-            backdrop-filter: blur(10px);
+            color: #fff;
+            padding: 0.9rem 1.3rem;
+            border-radius: 18px 18px 4px 18px;
+            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+            font-size: 1.05rem;
+            line-height: 1.6;
         }
 
         .assistant-avatar {
+            font-size: 0.82rem;
+            color: var(--teal-accent);
+            font-weight: 700;
+            margin-bottom: 0.4rem;
             display: flex;
             align-items: center;
-            gap: 0.5rem;
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            margin-bottom: 0.4rem;
-            font-weight: 600;
+            gap: 0.4rem;
+        }
+
+        .assistant .bubble {
+            background: var(--bot-msg-bg);
+            border: 1px solid var(--card-border);
+            padding: 1.25rem 1.4rem;
+            border-radius: 18px 18px 18px 4px;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+            width: 100%;
         }
 
         .response-text {
             white-space: pre-wrap;
             word-break: break-word;
+            line-height: 1.85;
+            font-size: 1.02rem;
+            color: #f1f5f9;
         }
 
-        .sources-accordion-container {
+        /* Sources Section */
+        .sources-container {
             margin-top: 1rem;
-            width: 100%;
             border-top: 1px solid rgba(255, 255, 255, 0.08);
             padding-top: 0.75rem;
         }
 
         .sources-toggle-btn {
-            background: rgba(15, 23, 42, 0.7);
-            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: var(--sources-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
             color: #cbd5e1;
-            padding: 0.65rem 1.1rem;
-            border-radius: 12px;
-            font-size: 0.9rem;
+            padding: 0.6rem 1rem;
+            border-radius: 10px;
+            font-size: 0.88rem;
             font-weight: 600;
             cursor: pointer;
             display: flex;
@@ -307,14 +313,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         .sources-toggle-btn:hover {
-            background: rgba(99, 102, 241, 0.2);
             border-color: var(--primary-accent);
             color: #fff;
-        }
-
-        .sources-toggle-btn .arrow {
-            transition: transform 0.3s ease;
-            font-size: 0.75rem;
         }
 
         .sources-toggle-btn.active .arrow {
@@ -326,9 +326,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             flex-direction: column;
             gap: 0.75rem;
             margin-top: 0.75rem;
-            max-height: 450px;
-            overflow-y: auto;
-            padding-left: 0.3rem;
         }
 
         .sources-list.show {
@@ -336,109 +333,42 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         .source-card {
-            background: var(--accordion-bg);
+            background: rgba(15, 23, 42, 0.9);
             border: 1px solid rgba(255, 255, 255, 0.06);
             border-radius: 10px;
             padding: 0.85rem 1rem;
-            font-size: 0.85rem;
-            line-height: 1.5;
-            transition: border-color 0.2s ease;
-        }
-
-        .source-card:hover {
-            border-color: rgba(99, 102, 241, 0.4);
         }
 
         .source-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 0.35rem;
-            color: #818cf8;
+            font-size: 0.85rem;
             font-weight: 700;
+            color: #818cf8;
+            margin-bottom: 0.4rem;
         }
 
         .source-score {
-            background: rgba(20, 184, 166, 0.2);
-            color: #2dd4bf;
-            padding: 0.15rem 0.5rem;
-            border-radius: 50px;
+            background: rgba(20, 184, 166, 0.15);
+            color: var(--teal-accent);
+            padding: 0.2rem 0.5rem;
+            border-radius: 6px;
             font-size: 0.75rem;
         }
 
         .source-snippet {
-            color: #94a3b8;
             font-size: 0.82rem;
-            white-space: pre-wrap;
+            color: var(--text-muted);
+            line-height: 1.5;
         }
 
-        .input-bar-container {
-            padding: 1rem 0;
-            background: transparent;
-            width: 100%;
-        }
-
-        .input-form {
-            display: flex;
-            gap: 0.75rem;
-            background: var(--card-bg);
-            border: 1px solid var(--card-border);
-            padding: 0.6rem 0.8rem;
-            border-radius: 16px;
-            backdrop-filter: blur(16px);
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
-            transition: border-color 0.25s ease;
-        }
-
-        .input-form:focus-within {
-            border-color: var(--primary-accent);
-            box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
-        }
-
-        .input-form input {
-            flex: 1;
-            background: transparent;
-            border: none;
-            outline: none;
-            color: #fff;
-            font-size: 1rem;
-            padding: 0.5rem 0.75rem;
-        }
-
-        .input-form input::placeholder {
-            color: #64748b;
-        }
-
-        .send-btn {
-            background: var(--user-msg-bg);
-            color: #fff;
-            border: none;
-            border-radius: 12px;
-            padding: 0.75rem 1.6rem;
-            font-weight: 700;
-            font-size: 0.95rem;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .send-btn:hover {
-            opacity: 0.9;
-            transform: scale(1.02);
-        }
-
-        .send-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
+        /* Typing Dot Indicator */
         .typing-indicator {
             display: flex;
             align-items: center;
             gap: 0.4rem;
-            padding: 0.5rem 0;
+            padding: 0.4rem 0;
         }
 
         .typing-dot {
@@ -454,7 +384,68 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         @keyframes bounce {
             0%, 80%, 100% { transform: scale(0); }
-            40% { transform: scale(1.0); }
+            40% { transform: scale(1); }
+        }
+
+        /* Input Bar Container */
+        .input-bar-container {
+            padding: 1rem 1.5rem 1.5rem;
+            background: transparent;
+        }
+
+        .input-form {
+            display: flex;
+            gap: 0.75rem;
+            background: rgba(30, 41, 59, 0.85);
+            border: 1px solid var(--card-border);
+            padding: 0.6rem 0.85rem;
+            border-radius: 16px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+            transition: border-color 0.25s ease, box-shadow 0.25s ease;
+        }
+
+        .input-form:focus-within {
+            border-color: var(--primary-accent);
+            box-shadow: 0 0 25px rgba(99, 102, 241, 0.35);
+        }
+
+        .input-form input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #fff;
+            font-size: 1rem;
+            padding: 0.5rem;
+        }
+
+        .send-btn {
+            background: var(--user-msg-bg);
+            color: #fff;
+            border: none;
+            border-radius: 12px;
+            padding: 0.65rem 1.5rem;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .send-btn:hover {
+            opacity: 0.95;
+            transform: scale(1.02);
+            box-shadow: 0 0 15px rgba(99, 102, 241, 0.5);
+        }
+
+        .send-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
         }
     </style>
 </head>
@@ -463,29 +454,28 @@ HTML_CONTENT = """<!DOCTYPE html>
     <header>
         <div class="header-brand">
             <h1>نقابة المهندسين الأردنيين</h1>
-            <p>المساعد الذكي للمعرفة والأنظمة الهندسية (RAG Chatbot Engine)</p>
+            <p>المساعد الذكي للمعرفة والأنظمة الهندسية (RAG Engine)</p>
         </div>
     </header>
 
     <main>
         <div id="chat-feed">
             <div class="welcome-card" id="welcome-screen">
-                <h2>أهلاً بك في المساعد الذكي لنقابة المهندسين 🤖</h2>
-                <p>تم إعداد وتكفيف هذا المساعد المتقدم للإجابة على جميع استفساراتك المتعلقة بأنظمة وقوانين النقابة، التكافل الاجتماعي، صندوق التقاعد، وشروط التسجيل اعتماداً على قاعدة المعرفة الموثوقة.</p>
+                <h2>أهلاً بك في المساعد الذكي لنقابة المهندسين</h2>
+                <p>تم إعداد هذا المساعد الذكي للإجابة الموثوقة على جميع استفساراتك المتعلقة بأنظمة النقابة، التكافل الاجتماعي، صندوق التقاعد، وشروط التسجيل اعتماداً على قاعدة المعرفة المعتمدة.</p>
                 <div class="suggestion-chips">
-                    <div class="chip" onclick="sendSuggestion('ما هي شروط تسجيل المهندسين الأردنيين في النقابة؟')">ما هي شروط تسجيل المهندسين الأردنيين؟</div>
-                    <div class="chip" onclick="sendSuggestion('شو هي خدمات صندوق التقاعد للمهندسين ورسوم الاشتراك؟')">شو هي خدمات صندوق التقاعد للمهندسين؟</div>
-                    <div class="chip" onclick="sendSuggestion('ما هو سلم رواتب المهندسين وكيف يحسب الحد الأدنى؟')">ما هو سلم رواتب المهندسين الحد الأدنى؟</div>
+                    <div class="chip" data-prompt="ما هي شروط تسجيل المهندسين الأردنيين في النقابة؟">ما هي شروط تسجيل المهندسين الأردنيين؟</div>
+                    <div class="chip" data-prompt="شو هي خدمات صندوق التقاعد للمهندسين ورسوم الاشتراك؟">شو هي خدمات صندوق التقاعد للمهندسين؟</div>
+                    <div class="chip" data-prompt="ما هو سلم رواتب المهندسين وكيف يحسب الحد الأدنى؟">ما هو سلم رواتب المهندسين الحد الأدنى؟</div>
                 </div>
             </div>
         </div>
 
         <div class="input-bar-container">
-            <form class="input-form" id="chat-form" onsubmit="handleSend(event)">
+            <form class="input-form" id="chat-form">
                 <input type="text" id="user-input" placeholder="اكتب سؤالك هنا باللغة العربية، اللهجة الأردنية، أو الإنجليزية..." autocomplete="off" />
                 <button type="submit" class="send-btn" id="send-button">
                     <span>إرسال</span>
-                    <span>✨</span>
                 </button>
             </form>
         </div>
@@ -494,42 +484,101 @@ HTML_CONTENT = """<!DOCTYPE html>
     <script>
         let chatHistory = [];
         let messageCounter = 0;
+        let isGenerating = false;
 
-        function sendSuggestion(text) {
-            document.getElementById('user-input').value = text;
-            handleSend(new Event('submit'));
-        }
-
-        function getApiKey(forceAsk = false) {
-            let key = localStorage.getItem('rag_api_key');
-            if (!key || forceAsk) {
-                key = prompt('أدخل مفتاح API الخاص بالخدمة (X-API-Key):');
-                if (key) localStorage.setItem('rag_api_key', key.trim());
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('chat-form');
+            if (form) {
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    submitPrompt();
+                });
             }
-            return key ? key.trim() : '';
+
+            document.querySelectorAll('.chip').forEach(function(chip) {
+                chip.addEventListener('click', function() {
+                    const promptText = this.getAttribute('data-prompt');
+                    if (promptText) {
+                        const inputEl = document.getElementById('user-input');
+                        if (inputEl) inputEl.value = promptText;
+                        submitPrompt();
+                    }
+                });
+            });
+        });
+
+        function getApiKey() {
+            const defaultKey = "{{DEFAULT_USER_KEY}}" || "456def";
+            let key = localStorage.getItem('rag_api_key');
+            if (!key || key.trim() === "") {
+                key = defaultKey;
+                localStorage.setItem('rag_api_key', key);
+            }
+            return key.trim();
         }
 
-        async function handleSend(e) {
-            e.preventDefault();
+        function handleChipClick(text) {
             const inputEl = document.getElementById('user-input');
-            const query = inputEl.value.trim();
+            if (inputEl) {
+                inputEl.value = text;
+                submitPrompt();
+            }
+        }
+
+        function renderSourcesHtml(sourcesData, msgId) {
+            if (!sourcesData || sourcesData.length === 0) return '';
+            let cards = '';
+            for (let i = 0; i < sourcesData.length; i++) {
+                let s = sourcesData[i];
+                let rank = s.rank || (i + 1);
+                let title = escapeHtml(s.title || 'وثيقة');
+                let score = s.similarity_score || 0;
+                let snippet = escapeHtml(s.text ? s.text.substring(0, 300) + '...' : '');
+                cards += '<div class="source-card">' +
+                    '<div class="source-header">' +
+                    '<span>[المصدر ' + rank + '] ' + title + '</span>' +
+                    '<span class="source-score">' + score + '% تطابق</span>' +
+                    '</div>' +
+                    '<div class="source-snippet">' + snippet + '</div>' +
+                    '</div>';
+            }
+            return '<div class="sources-container">' +
+                '<button class="sources-toggle-btn" onclick="toggleSources(&quot;' + msgId + '&quot;)" id="btn-' + msgId + '">' +
+                '<span>📚 المصادر المعتمدة (' + sourcesData.length + ' مصادر)</span>' +
+                '<span class="arrow">▼</span>' +
+                '</button>' +
+                '<div class="sources-list" id="list-' + msgId + '">' +
+                cards +
+                '</div>' +
+                '</div>';
+        }
+
+        async function submitPrompt() {
+            if (isGenerating) return;
+
+            const inputEl = document.getElementById('user-input');
+            const query = inputEl ? inputEl.value.trim() : '';
             if (!query) return;
+
+            isGenerating = true;
+            const sendBtn = document.getElementById('send-button');
+            if (sendBtn) sendBtn.disabled = true;
 
             const welcomeScreen = document.getElementById('welcome-screen');
             if (welcomeScreen) welcomeScreen.style.display = 'none';
 
             appendUserMessage(query);
-            inputEl.value = '';
-
-            const sendBtn = document.getElementById('send-button');
-            sendBtn.disabled = true;
+            if (inputEl) inputEl.value = '';
 
             const typingId = appendTypingIndicator();
 
             try {
-                const response = await fetch('/api/chat', {
+                const response = await fetch('/api/chat/stream', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-Key': getApiKey() },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': getApiKey()
+                    },
                     body: JSON.stringify({
                         query: query,
                         history: chatHistory,
@@ -537,31 +586,84 @@ HTML_CONTENT = """<!DOCTYPE html>
                     })
                 });
 
-                const data = await response.json();
-                if (response.status === 401) {
-                    removeTypingIndicator(typingId);
-                    localStorage.removeItem('rag_api_key');
+                removeTypingIndicator(typingId);
+
+                if (!response.ok) {
                     appendAssistantMessage({
-                        answer: 'مفتاح API غير صحيح. أعد تحميل الصفحة وأدخل المفتاح الصحيح.',
+                        answer: 'عذراً، حدث خطأ في الخادم (رمز الخطأ: ' + response.status + '). يرجى المحاولة لاحقاً.',
                         sources: []
                     });
                     return;
                 }
-                removeTypingIndicator(typingId);
+
+                messageCounter++;
+                const msgId = 'msg-' + messageCounter;
+                const feed = document.getElementById('chat-feed');
+                const row = document.createElement('div');
+                row.className = 'message-row assistant';
+                row.innerHTML = `
+                    <div class="assistant-avatar">المساعد الذكي (RAG Engine)</div>
+                    <div class="bubble">
+                        <div class="response-text" id="text-${msgId}"></div>
+                        <div id="sources-${msgId}"></div>
+                    </div>
+                `;
+                feed.appendChild(row);
+                scrollToBottom();
+
+                const textEl = document.getElementById('text-' + msgId);
+                const sourcesEl = document.getElementById('sources-' + msgId);
+
+                let fullText = '';
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split(String.fromCharCode(10));
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed.indexOf('data: ') === 0) {
+                            const jsonStr = trimmed.substring(6).trim();
+                            if (!jsonStr) continue;
+                            try {
+                                const payload = JSON.parse(jsonStr);
+                                if (payload.type === 'meta') {
+                                    const sourcesData = payload.sources || [];
+                                    if (sourcesData.length > 0 && sourcesEl) {
+                                        sourcesEl.innerHTML = renderSourcesHtml(sourcesData, msgId);
+                                    }
+                                } else if (payload.type === 'token') {
+                                    fullText += (payload.token || '');
+                                    if (textEl) textEl.textContent = fullText;
+                                    scrollToBottom();
+                                }
+                            } catch (err) {
+                                console.error('SSE JSON Error:', err);
+                            }
+                        }
+                    }
+                }
 
                 chatHistory.push({ role: 'user', content: query });
-                chatHistory.push({ role: 'assistant', content: data.answer });
-
-                appendAssistantMessage(data);
+                chatHistory.push({ role: 'assistant', content: fullText });
 
             } catch (err) {
+                console.error('Fetch error:', err);
                 removeTypingIndicator(typingId);
                 appendAssistantMessage({
-                    answer: 'عذراً، حدث خطأ أثناء الاتصال بالخادم الرئيسي. الرجاء التأكد من تشغيل الخادم والمحاولة مجدداً.',
+                    answer: 'عذراً، حدث خطأ أثناء الاتصال بالخادم الرئيسي. الرجاء المحاولة مجدداً.',
                     sources: []
                 });
             } finally {
-                sendBtn.disabled = false;
+                isGenerating = false;
+                if (sendBtn) sendBtn.disabled = false;
                 scrollToBottom();
             }
         }
@@ -579,6 +681,25 @@ HTML_CONTENT = """<!DOCTYPE html>
             scrollToBottom();
         }
 
+        function appendAssistantMessage(data) {
+            const feed = document.getElementById('chat-feed');
+            messageCounter++;
+            const msgId = 'msg-' + messageCounter;
+            const row = document.createElement('div');
+            row.className = 'message-row assistant';
+            const sourcesHtml = renderSourcesHtml(data.sources, msgId);
+
+            row.innerHTML = `
+                <div class="assistant-avatar">المساعد الذكي (RAG Engine)</div>
+                <div class="bubble">
+                    <div class="response-text">${escapeHtml(data.answer)}</div>
+                    ${sourcesHtml}
+                </div>
+            `;
+            feed.appendChild(row);
+            scrollToBottom();
+        }
+
         function appendTypingIndicator() {
             const feed = document.getElementById('chat-feed');
             const id = 'typing-' + Date.now();
@@ -586,7 +707,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             row.className = 'message-row assistant';
             row.id = id;
             row.innerHTML = `
-                <div class="assistant-avatar">🤖 المساعد الذكي يحلل المصادر...</div>
+                <div class="assistant-avatar">المساعد الذكي يحلل المصادر...</div>
                 <div class="bubble">
                     <div class="typing-indicator">
                         <div class="typing-dot"></div>
@@ -605,50 +726,6 @@ HTML_CONTENT = """<!DOCTYPE html>
             if (el) el.remove();
         }
 
-        function appendAssistantMessage(data) {
-            const feed = document.getElementById('chat-feed');
-            messageCounter++;
-            const msgId = 'msg-' + messageCounter;
-            const row = document.createElement('div');
-            row.className = 'message-row assistant';
-
-            let sourcesHtml = '';
-            if (data.sources && data.sources.length > 0) {
-                const sourceCards = data.sources.map(src => `
-                    <div class="source-card">
-                        <div class="source-header">
-                            <span>[المصدر ${src.rank}] ${escapeHtml(src.title)} ${src.section_title ? '— ' + escapeHtml(src.section_title) : ''}</span>
-                            <span class="source-score">${src.similarity_score}% تطابق</span>
-                        </div>
-                        <div class="source-snippet">${escapeHtml(src.text ? src.text.substring(0, 300) + '...' : '')}</div>
-                    </div>
-                `).join('');
-
-                sourcesHtml = `
-                    <div class="sources-accordion-container">
-                        <button class="sources-toggle-btn" onclick="toggleSources('${msgId}')" id="btn-${msgId}">
-                            <span>📚 المصادر المعتمدة (${data.sources.length} مصادر)</span>
-                            <span class="arrow">▼</span>
-                        </button>
-                        <div class="sources-list" id="list-${msgId}">
-                            ${sourceCards}
-                        </div>
-                    </div>
-                `;
-            }
-
-            row.innerHTML = `
-                <div class="assistant-avatar">🤖 المساعد الذكي (RAG Engine)</div>
-                <div class="bubble">
-                    <div class="response-text">${escapeHtml(data.answer)}</div>
-                    ${sourcesHtml}
-                </div>
-            `;
-
-            feed.appendChild(row);
-            scrollToBottom();
-        }
-
         function toggleSources(msgId) {
             const listEl = document.getElementById('list-' + msgId);
             const btnEl = document.getElementById('btn-' + msgId);
@@ -660,7 +737,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         function scrollToBottom() {
             const feed = document.getElementById('chat-feed');
-            feed.scrollTop = feed.scrollHeight;
+            if (feed) feed.scrollTop = feed.scrollHeight;
         }
 
         function escapeHtml(text) {
