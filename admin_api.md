@@ -1,4 +1,4 @@
-# Admin API & Panel — Knowledge Base Management
+ # Admin API & Panel — Knowledge Base Management
 
 Manage the documents in the vector knowledge base at runtime — no manual
 `main.py ingest` runs needed.

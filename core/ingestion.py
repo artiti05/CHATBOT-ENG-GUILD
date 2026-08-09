@@ -33,8 +33,7 @@ except ImportError:
 from core.config import (
     BASE_DIR, STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH,
     CHROMA_COLLECTION_NAME, BGE_M3_MODEL_NAME, USE_FP16, CHUNK_SIZE_TOKENS,
-    CHUNK_OVERLAP_TOKENS, VLM_PROVIDER, OLLAMA_URL, OLLAMA_VISION_MODEL,
-    LMSTUDIO_BASE_URL, LMSTUDIO_VISION_MODEL, PARSED_OUTPUT_DIR,
+    CHUNK_OVERLAP_TOKENS, OLLAMA_URL, OLLAMA_VISION_MODEL, PARSED_OUTPUT_DIR,
     RENDER_DPI, CLAHE_CLIP_LIMIT, CLAHE_TILE_GRID, MIN_TABLE_AREA_FRACTION,
     TABLE_UPSCALE_FACTOR, TABLE_CROP_PADDING, REQUEST_TIMEOUT, NUM_CTX, NUM_PREDICT,
     FILES_DIR, TEXTS_DIR, PDFS_DIR, IGNORE_TEXTS_DIR, EXCLUDE_DIRS, UNIFIED_VISION_PROMPT
@@ -271,29 +270,7 @@ def array_to_base64_png(img: np.ndarray) -> str:
 # 4. VISION VLM CALL ENGINE & UNIFIED SINGLE-PASS PARSER
 # ---------------------------------------------------------------------------
 def call_vlm_vision_api(prompt: str, img_b64: str) -> str:
-    """Calls Ollama or LM Studio vision endpoint depending on VLM_PROVIDER."""
-    if VLM_PROVIDER == "lmstudio":
-        try:
-            payload = {
-                "model": LMSTUDIO_VISION_MODEL,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                        ]
-                    }
-                ],
-                "temperature": 0.1,
-                "max_tokens": NUM_PREDICT
-            }
-            res = requests.post(f"{LMSTUDIO_BASE_URL.rstrip('/')}/chat/completions", json=payload, timeout=REQUEST_TIMEOUT)
-            if res.status_code == 200:
-                return res.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        except Exception as e:
-            print(f"[VLM LMStudio Warning]: {e}")
-
+    """Calls Ollama vision endpoint for PDF parsing."""
     # Default to Ollama (qwen2.5vl:7b)
     payload = {
         "model": OLLAMA_VISION_MODEL,

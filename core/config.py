@@ -35,6 +35,42 @@ BGE_M3_MODEL_NAME = "BAAI/bge-m3"
 BGE_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 USE_FP16 = True
 
+# Reranker score threshold — chunks below this raw logit are filtered out
+# BGE cross-encoder scale: >2.0 = strong match, 0.0-2.0 = moderate, <0.0 = weak/irrelevant
+# sigmoid(0.0) = 50%, sigmoid(2.0) = 88%, sigmoid(-2.0) = 12%
+RERANK_THRESHOLD    = 0.0   # raw logit floor — anything below is dropped entirely
+RERANK_SCORE_FLOOR  = 50    # minimum % shown (for chunks that pass threshold)
+RERANK_SCORE_CEIL   = 97    # maximum % shown (no chunk ever claims 100%)
+
+# Document priority boosts — added to raw reranker logit BEFORE sigmoid conversion
+# Higher boost = chunk ranks higher and shows higher similarity % when relevant
+# Effect: +0.5 boost ≈ +8% display score near threshold; +1.0 ≈ +15% near threshold
+DOCUMENT_PRIORITY = {
+    # ─── Tier 1: Primary official laws (highest authority) ───
+    "قانون_نقابة_المهندسين":                1.2,
+    "النظام_الداخلي_للنقابة":              1.0,
+    "نظام_التقاعد_2023":                   1.0,
+    # ─── Tier 2: Core regulations ───
+    "نظام_التأمين_الصحي":                  0.8,
+    "نظام_ممارسة_مهنة_الهندسة":           0.8,
+    "نظام_المكاتب_والشركات":              0.7,
+    "نظام_التكافل":                        0.7,
+    "نظام_صندوق_التأمين_الاجتماعي":       0.7,
+    "نظام_الصندوق_الهندسي_للتدريب":       0.6,
+    "نظام_التأهيل_والاعتماد":             0.6,
+    # ─── Tier 3: Registration & financial docs ───
+    "شروط-تسجيل-الاردنيين":              0.7,
+    "شروط_تسجيل":                         0.6,
+    "سلم_الرواتب":                         0.7,
+    "تعليمات_المنفعة":                     0.5,
+    "النشرة_الارشادية":                   0.5,
+    "فوائد العضوية":                      0.4,
+    # ─── Tier 4: Informational / generated markdown ───
+    "عن النقابة":                          0.2,
+    "ممارسة المهنة":                       0.2,
+    "المهندسين الشباب":                   0.1,
+}
+
 # Chunking settings (550 Token Chunks ~ 380-420 Words for stronger BGE reranker matches)
 CHUNK_SIZE_TOKENS = 550
 TARGET_CHUNK_WORDS = 400
@@ -48,15 +84,10 @@ CRAWL_CACHE_DIR = STORAGE_DIR / "crawler_cache"
 CRAWL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Multi-Stage Ingestion Pipeline & Ollama Settings
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # "ollama" or "lmstudio"
-VLM_PROVIDER = os.getenv("VLM_PROVIDER", "ollama")  # "ollama" or "lmstudio" or "mock"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "ministral-3:8b")
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
-LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
-LMSTUDIO_CHAT_MODEL = os.getenv("LMSTUDIO_CHAT_MODEL", "jais-adapted-7b-chat")
-LMSTUDIO_VISION_MODEL = os.getenv("LMSTUDIO_VISION_MODEL", "qwen/qwen2.5-vl-7b")
 
 # Vision PDF Parser Tuning
 PARSED_OUTPUT_DIR = STORAGE_DIR / "pdf_parsed_results"

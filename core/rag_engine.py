@@ -1,5 +1,6 @@
 import os
 import re
+import math
 import time
 import requests
 from typing import Dict, Any, List, Tuple, Optional
@@ -14,8 +15,10 @@ except ImportError:
 
 from core.config import (
     CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME, BGE_RERANKER_MODEL_NAME,
-    LMSTUDIO_BASE_URL, LMSTUDIO_CHAT_MODEL, OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL, VLM_PROVIDER,
-    NUM_CTX, NUM_PREDICT, OLLAMA_KEEP_ALIVE
+    OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_VISION_MODEL,
+    NUM_CTX, NUM_PREDICT, OLLAMA_KEEP_ALIVE,
+    RERANK_THRESHOLD, RERANK_SCORE_FLOOR, RERANK_SCORE_CEIL,
+    DOCUMENT_PRIORITY
 )
 
 from core.ingestion import BGEM3Embedder
@@ -60,15 +63,27 @@ class BGEReranker:
         for i, score in enumerate(scores):
             raw = float(score)
             candidate_chunks[i]["rerank_score"] = raw
-            # Normalize BGE score: typical range [-5, 10] → 0-100%, no artificial floor
-            match_pct = min(max(int((raw + 5.0) / 15.0 * 100), 0), 99)
+            # Sigmoid maps raw logit to probability:
+            #   raw >  2.0  →  88-97%  (strong match)
+            #   raw  0-2.0  →  50-88%  (moderate match)
+            #   raw <  0.0  →  filtered out (irrelevant)
+            sig = 1.0 / (1.0 + math.exp(-raw))          # sigmoid: 0.0 → 1.0
+            match_pct = int(sig * 100)
+            match_pct = min(max(match_pct, RERANK_SCORE_FLOOR), RERANK_SCORE_CEIL)
             candidate_chunks[i]["similarity_score"] = match_pct
 
-        ranked_chunks = sorted(candidate_chunks, key=lambda x: x.get("rerank_score", 0.0), reverse=True)
-        for rank, chunk in enumerate(ranked_chunks[:top_k], 1):
+        # Filter: drop chunks below the raw logit threshold (genuinely irrelevant)
+        above_threshold = [c for c in candidate_chunks if c.get("rerank_score", -99) >= RERANK_THRESHOLD]
+
+        # If everything is filtered out, relax and keep the best few anyway
+        if not above_threshold:
+            above_threshold = sorted(candidate_chunks, key=lambda x: x.get("rerank_score", -99), reverse=True)[:3]
+
+        ranked = sorted(above_threshold, key=lambda x: x.get("rerank_score", 0.0), reverse=True)
+        for rank, chunk in enumerate(ranked[:top_k], 1):
             chunk["rank"] = rank
 
-        return ranked_chunks[:top_k]
+        return ranked[:top_k]
 
 # ---------------------------------------------------------------------------
 # 2. HYBRID VECTOR SEARCH KNOWLEDGE RETRIEVER
@@ -80,6 +95,14 @@ class KnowledgeRetriever:
         self.embedder = BGEM3Embedder()
         self.reranker = BGEReranker()
 
+    def _get_priority_boost(self, file_name: str) -> float:
+        """Return additive logit boost for authoritative source documents.
+        Checked against substrings of the file_name so partial matches work."""
+        for pattern, boost in DOCUMENT_PRIORITY.items():
+            if pattern in file_name:
+                return boost
+        return 0.0
+
     def retrieve(self, query_text: str, top_k: int = 10) -> List[Dict[str, Any]]:
         if not query_text or not query_text.strip():
             return []
@@ -89,31 +112,45 @@ class KnowledgeRetriever:
 
         results = self.collection.query(
             query_embeddings=[query_dense],
-            n_results=min(top_k * 2, 15), # Fast candidate over-sampling for cross-encoder reranking
+            n_results=min(top_k * 2, 20),  # over-sample more to let priority re-rank
             include=["documents", "metadatas", "distances"]
         )
 
         candidates = []
         if results and results.get("documents") and results["documents"][0]:
-            docs = results["documents"][0]
+            docs  = results["documents"][0]
             metas = results["metadatas"][0]
             dists = results["distances"][0]
 
             for i in range(len(docs)):
-                dist = dists[i]
-                sim_pct = int(max(0.0, (1.0 - dist)) * 100)
                 meta = metas[i] if i < len(metas) else {}
-
                 candidates.append({
-                    "text": docs[i],
-                    "title": meta.get("file_name", "وثيقة"),
-                    "section_title": f"جزء {meta.get('chunk_index', 1)}",
-                    "similarity_score": sim_pct,
-                    "distance": dist,
-                    "metadata": meta
+                    "text":             docs[i],
+                    "title":            meta.get("file_name", "وثيقة"),
+                    "section_title":    f"جزء {meta.get('chunk_index', 1)}",
+                    "similarity_score": 0,
+                    "distance":         dists[i],
+                    "metadata":         meta
                 })
 
-        return self.reranker.rerank(query_text, candidates, top_k=top_k)
+        # Step 1: cross-encoder rerank
+        reranked = self.reranker.rerank(query_text, candidates, top_k=top_k)
+
+        # Step 2: apply document priority boost to raw logit, recompute sigmoid score
+        for chunk in reranked:
+            boost = self._get_priority_boost(chunk.get("title", ""))
+            if boost > 0.0:
+                new_raw = chunk.get("rerank_score", 0.0) + boost
+                chunk["rerank_score"] = new_raw
+                sig = 1.0 / (1.0 + math.exp(-new_raw))
+                chunk["similarity_score"] = min(max(int(sig * 100), RERANK_SCORE_FLOOR), RERANK_SCORE_CEIL)
+
+        # Step 3: re-sort by boosted score, reassign ranks
+        reranked.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
+        for rank, chunk in enumerate(reranked, 1):
+            chunk["rank"] = rank
+
+        return reranked
 
 def clean_formatting(text: str) -> str:
     """Strips markdown bold/italic asterisks (**text**) and header hashes to deliver clean presentation text."""
@@ -131,11 +168,8 @@ def clean_formatting(text: str) -> str:
 class RAGChatbot:
     def __init__(self):
         self.retriever = KnowledgeRetriever()
-        self.provider = (VLM_PROVIDER or "ollama").lower()
         self.ollama_url = OLLAMA_URL
         self.ollama_model = OLLAMA_CHAT_MODEL
-        self.lmstudio_url = f"{LMSTUDIO_BASE_URL.rstrip('/')}/chat/completions"
-        self.lmstudio_model = LMSTUDIO_CHAT_MODEL
 
     def detect_and_normalize_query(self, query: str) -> Tuple[str, str]:
         q = query.strip()
@@ -343,25 +377,6 @@ class RAGChatbot:
                 except Exception as o_err:
                     print(f"[RAG Chatbot Warning] Ollama call ('{model_tag}') failed: {o_err}")
 
-        # Secondary fallback if LM Studio is explicitly requested or Ollama call failed
-        if not llm_success and self.provider == "lmstudio":
-            try:
-                payload = {
-                    "model": self.lmstudio_model,
-                    "messages": [{"role": "user", "content": full_prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 1500
-                }
-                res = requests.post(self.lmstudio_url, json=payload, timeout=(3.0, 30.0))
-                if res.status_code == 200:
-                    choices = res.json().get("choices", [])
-                    if choices:
-                        content = choices[0].get("message", {}).get("content", "")
-                        if content:
-                            generated_answer = content.strip()
-                            llm_success = True
-            except Exception as err:
-                print(f"[RAG Chatbot Warning] LM Studio call failed ({type(err).__name__}).")
 
         if not llm_success:
             generated_answer = (
