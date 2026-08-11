@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+.git/
+.gitignore
+.DS_Store
+*.pyc
+*.pyo
+*.log
+*.env          # keep secrets out of the image
+data/
+db/
+docker-compose.yml
+Dockerfile
+README.md
+admin_api.md
