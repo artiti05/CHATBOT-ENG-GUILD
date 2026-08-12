@@ -8,9 +8,20 @@ load_dotenv()
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEXTS_DIR = BASE_DIR / "data" / "texts"
+MARKDOWNS_DIR = BASE_DIR / "data" / "markdowns"
 PDFS_DIR = BASE_DIR / "data" / "pdfs"
+OUTPUT_DIR = BASE_DIR / "data" / "output_dir"
+PARSED_OUTPUT_DIR = OUTPUT_DIR  # Alias for vision parser output directory
+CHUNKING_LOGS_DIR = BASE_DIR / "data" / "chunking_logs"
+CRAWLER_CACHE_DIR = BASE_DIR / "data" / "crawler"
+CRAWL_CACHE_DIR = CRAWLER_CACHE_DIR  # Alias for backward compatibility
 NEW_UPLOADS_DIR = BASE_DIR / "data" / "new_uploads"
 FILES_DIR = BASE_DIR / "files"
+
+
+# Ensure essential data directories exist
+for p in (TEXTS_DIR, MARKDOWNS_DIR, PDFS_DIR, OUTPUT_DIR, CHUNKING_LOGS_DIR, CRAWLER_CACHE_DIR):
+    p.mkdir(parents=True, exist_ok=True)
 
 # Ingestion Exclusion Flags
 IGNORE_TEXTS_DIR = False
@@ -20,8 +31,16 @@ EXCLUDE_DIRS = ["الإعلانات والأخبار", "large_pdfs_over_30_pages
 STORAGE_DIR = BASE_DIR / "data" / "storage"
 CHROMA_PERSIST_DIR = STORAGE_DIR / "chroma_db"
 REGISTRY_DB_PATH = STORAGE_DIR / "registry.db"
+BM25_INDEX_PATH = STORAGE_DIR / "bm25_index.pkl"
+CACHE_PERSIST_PATH = STORAGE_DIR / "semantic_cache.json"
 
-# Ensure directories exist
+# Semantic Cache Settings
+CACHE_SIMILARITY_THRESHOLD = 0.88
+CACHE_MAX_ENTRIES = 1000
+
+
+
+# Ensure storage directories exist
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -35,53 +54,47 @@ BGE_M3_MODEL_NAME = "BAAI/bge-m3"
 BGE_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 USE_FP16 = True
 
-# Reranker score threshold — chunks below this raw logit are filtered out
-# BGE cross-encoder scale: >2.0 = strong match, 0.0-2.0 = moderate, <0.0 = weak/irrelevant
-# sigmoid(0.0) = 50%, sigmoid(2.0) = 88%, sigmoid(-2.0) = 12%
-RERANK_THRESHOLD    = 0.0   # raw logit floor — anything below is dropped entirely
+# Reranker score threshold — chunks below raw logit 0.0 (sigmoid 50%) are strictly discarded
+RERANK_THRESHOLD    = 0.0   # raw logit floor (50% match) — anything below is dropped BEFORE boost
+RELEVANCE_THRESHOLD = 50    # Minimum similarity percentage (50%) to include chunk in LLM context
 RERANK_SCORE_FLOOR  = 50    # minimum % shown (for chunks that pass threshold)
 RERANK_SCORE_CEIL   = 97    # maximum % shown (no chunk ever claims 100%)
 
-# Document priority boosts — added to raw reranker logit BEFORE sigmoid conversion
-# Higher boost = chunk ranks higher and shows higher similarity % when relevant
-# Effect: +0.5 boost ≈ +8% display score near threshold; +1.0 ≈ +15% near threshold
+# Document priority boosts — added to raw reranker logit ONLY AFTER passing threshold (raw_logit >= 0.0)
+# Calibrated tie-breaker values: +0.35 boost ≈ +5% display score near threshold
 DOCUMENT_PRIORITY = {
     # ─── Tier 1: Primary official laws (highest authority) ───
-    "قانون_نقابة_المهندسين":                1.2,
-    "النظام_الداخلي_للنقابة":              1.0,
-    "نظام_التقاعد_2023":                   1.0,
+    "قانون_نقابة_المهندسين":                0.35,
+    "النظام_الداخلي_للنقابة":              0.30,
+    "نظام_التقاعد_2023":                   0.30,
     # ─── Tier 2: Core regulations ───
-    "نظام_التأمين_الصحي":                  0.8,
-    "نظام_ممارسة_مهنة_الهندسة":           0.8,
-    "نظام_المكاتب_والشركات":              0.7,
-    "نظام_التكافل":                        0.7,
-    "نظام_صندوق_التأمين_الاجتماعي":       0.7,
-    "نظام_الصندوق_الهندسي_للتدريب":       0.6,
-    "نظام_التأهيل_والاعتماد":             0.6,
+    "نظام_التأمين_الصحي":                  0.25,
+    "نظام_ممارسة_مهنة_الهندسة":           0.25,
+    "نظام_المكاتب_والشركات":              0.20,
+    "نظام_التكافل":                        0.20,
+    "نظام_صندوق_التأمين_الاجتماعي":       0.20,
+    "نظام_الصندوق_الهندسي_للتدريب":       0.15,
+    "نظام_التأهيل_والاعتماد":             0.15,
     # ─── Tier 3: Registration & financial docs ───
-    "شروط-تسجيل-الاردنيين":              0.7,
-    "شروط_تسجيل":                         0.6,
-    "سلم_الرواتب":                         0.7,
-    "تعليمات_المنفعة":                     0.5,
-    "النشرة_الارشادية":                   0.5,
-    "فوائد العضوية":                      0.4,
+    "شروط-تسجيل-الاردنيين":              0.20,
+    "شروط_تسجيل":                         0.15,
+    "سلم_الرواتب":                         0.20,
+    "تعليمات_المنفعة":                     0.15,
+    "النشرة_الارشادية":                   0.10,
+    "فوائد العضوية":                      0.10,
     # ─── Tier 4: Informational / generated markdown ───
-    "عن النقابة":                          0.2,
-    "ممارسة المهنة":                       0.2,
-    "المهندسين الشباب":                   0.1,
+    "عن النقابة":                          0.05,
+    "ممارسة المهنة":                       0.05,
+    "المهندسين الشباب":                   0.05,
 }
 
-# Chunking settings (550 Token Chunks ~ 380-420 Words for stronger BGE reranker matches)
-CHUNK_SIZE_TOKENS = 550
-TARGET_CHUNK_WORDS = 400
-MIN_CHUNK_WORDS = 250
-MAX_CHUNK_WORDS = 650
-OVERLAP_SENTENCES = 2
-CHUNK_OVERLAP_TOKENS = 60
-
-# Web Crawler settings
-CRAWL_CACHE_DIR = STORAGE_DIR / "crawler_cache"
-CRAWL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+# Hierarchical Parent-Child Chunking settings
+PARENT_CHUNK_TOKENS = 800       # Large context block for LLM answer generation
+PARENT_OVERLAP_TOKENS = 100     # Parent overlap
+CHILD_CHUNK_TOKENS = 150        # Small granular chunk for precise vector/BM25 retrieval
+CHILD_OVERLAP_TOKENS = 25       # Child overlap
+CHUNK_SIZE_TOKENS = CHILD_CHUNK_TOKENS  # Fallback backward-compatibility alias
+CHUNK_OVERLAP_TOKENS = CHILD_OVERLAP_TOKENS
 
 # Multi-Stage Ingestion Pipeline & Ollama Settings
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -89,9 +102,6 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "ministral-3:8b")
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 
-# Vision PDF Parser Tuning
-PARSED_OUTPUT_DIR = STORAGE_DIR / "pdf_parsed_results"
-PARSED_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 RENDER_DPI = 300
 CLAHE_CLIP_LIMIT = 2.0

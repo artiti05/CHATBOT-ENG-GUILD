@@ -7,6 +7,7 @@ import base64
 import hashlib
 import sqlite3
 import unicodedata
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -32,12 +33,15 @@ except ImportError:
 
 from core.config import (
     BASE_DIR, STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH,
-    CHROMA_COLLECTION_NAME, BGE_M3_MODEL_NAME, USE_FP16, CHUNK_SIZE_TOKENS,
-    CHUNK_OVERLAP_TOKENS, OLLAMA_URL, OLLAMA_VISION_MODEL, PARSED_OUTPUT_DIR,
+    CHROMA_COLLECTION_NAME, BGE_M3_MODEL_NAME, USE_FP16, PARENT_CHUNK_TOKENS,
+    PARENT_OVERLAP_TOKENS, CHILD_CHUNK_TOKENS, CHILD_OVERLAP_TOKENS,
+    OLLAMA_URL, OLLAMA_VISION_MODEL, PARSED_OUTPUT_DIR, MARKDOWNS_DIR,
     RENDER_DPI, CLAHE_CLIP_LIMIT, CLAHE_TILE_GRID, MIN_TABLE_AREA_FRACTION,
     TABLE_UPSCALE_FACTOR, TABLE_CROP_PADDING, REQUEST_TIMEOUT, NUM_CTX, NUM_PREDICT,
     FILES_DIR, TEXTS_DIR, PDFS_DIR, IGNORE_TEXTS_DIR, EXCLUDE_DIRS, UNIFIED_VISION_PROMPT
 )
+from core.bm25_search import BM25Indexer
+
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +275,6 @@ def array_to_base64_png(img: np.ndarray) -> str:
 # ---------------------------------------------------------------------------
 def call_vlm_vision_api(prompt: str, img_b64: str) -> str:
     """Calls Ollama vision endpoint for PDF parsing."""
-    # Default to Ollama (qwen2.5vl:7b)
     payload = {
         "model": OLLAMA_VISION_MODEL,
         "prompt": prompt,
@@ -299,7 +302,6 @@ def process_vision_page(gray_img: np.ndarray, page_num: int, debug_dir: Path) ->
     parsed_text = call_vlm_vision_api(UNIFIED_VISION_PROMPT, page_b64)
     del page_b64
     return parsed_text
-
 
 
 def parse_and_save_pdf_vision(pdf_path: Path) -> Tuple[str, Path, int]:
@@ -362,16 +364,61 @@ def parse_and_save_pdf_vision(pdf_path: Path) -> Tuple[str, Path, int]:
     parsed_md_path.write_text(full_text, encoding="utf-8")
     del combined_md
 
+    # Copy parsed markdown result to data/markdowns/ for clean non-GPU indexing
+    try:
+        MARKDOWNS_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(parsed_md_path, MARKDOWNS_DIR / parsed_md_path.name)
+    except Exception as e:
+        print(f"[Vision Pipeline Warning] Failed to copy parsed markdown to markdowns/: {e}")
+
+    # Save copy of source PDF into output directory for complete self-contained inspection
+    try:
+        target_pdf_copy = pdf_out_dir / pdf_path.name
+        if not target_pdf_copy.exists():
+            shutil.copy2(pdf_path, target_pdf_copy)
+    except Exception as e:
+        print(f"[Vision Pipeline Warning] Failed to copy source PDF to output_dir: {e}")
+
     print(f"[Vision Pipeline] Completed '{pdf_path.name}'. Parsed output saved: {parsed_md_path}")
     return full_text, parsed_md_path, total_pages
 
+
 # ---------------------------------------------------------------------------
-# 5. TOKEN CHUNKER LAYER
+# 5. TOKEN CHUNKER LAYER (PARENT-CHILD HIERARCHICAL STRUCTURE)
 # ---------------------------------------------------------------------------
 class TextChunker:
-    def __init__(self, chunk_size_tokens: int = CHUNK_SIZE_TOKENS, chunk_overlap_tokens: int = CHUNK_OVERLAP_TOKENS):
-        self.chunk_size = chunk_size_tokens
-        self.chunk_overlap = chunk_overlap_tokens
+    """
+    Hierarchical Parent-Child Token Chunker:
+    - Parent Blocks (~800 tokens / ~520 Arabic words): Provides comprehensive context for LLM response generation.
+    - Child Chunks (~150 tokens / ~100 Arabic words): Granular indexed units for high-precision vector & BM25 retrieval.
+    """
+    def __init__(
+        self,
+        parent_tokens: int = PARENT_CHUNK_TOKENS,
+        parent_overlap_tokens: int = PARENT_OVERLAP_TOKENS,
+        child_tokens: int = CHILD_CHUNK_TOKENS,
+        child_overlap_tokens: int = CHILD_OVERLAP_TOKENS
+    ):
+        # Arabic word-to-token estimation factor: 1 word ~ 1.5 tokens
+        self.words_per_parent = int(parent_tokens / 1.5)        # ~530 words
+        self.words_parent_overlap = int(parent_overlap_tokens / 1.5) # ~65 words
+        self.words_per_child = int(child_tokens / 1.5)          # ~100 words
+        self.words_child_overlap = int(child_overlap_tokens / 1.5)   # ~16 words
+
+    def _split_into_word_chunks(self, words: List[str], max_words: int, overlap_words: int) -> List[List[str]]:
+        if not words:
+            return []
+        chunks = []
+        start = 0
+        while start < len(words):
+            end = start + max_words
+            chunk = words[start:end]
+            if chunk:
+                chunks.append(chunk)
+            start += max_words - overlap_words
+            if max_words <= overlap_words:
+                break
+        return chunks
 
     def chunk_text(self, document_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
         text = document_dict.get("full_text", "")
@@ -381,51 +428,42 @@ class TextChunker:
         source_id = document_dict.get("source_id", "doc_unknown")
         file_name = document_dict.get("file_name", "unknown")
         source_type = document_dict.get("source_type", "pdf")
-        paragraphs = text.split("\n\n")
 
-        chunks = []
-        current_words = []
-        current_len = 0
-        chunk_idx = 1
+        # Split document into paragraphs and all words
+        words = text.split()
+        if not words:
+            return []
 
-        for para in paragraphs:
-            para_words = para.strip().split()
-            if not para_words:
-                continue
+        # 1. Generate Parent Blocks (~800 tokens)
+        parent_word_blocks = self._split_into_word_chunks(words, self.words_per_parent, self.words_parent_overlap)
+        
+        child_chunks = []
+        global_child_idx = 1
 
-            para_len = len(para_words)
-            if current_len + para_len > self.chunk_size and current_words:
-                chunk_str = " ".join(current_words)
-                chunks.append({
-                    "chunk_id": f"{source_id}_chunk_{chunk_idx}",
+        for p_idx, p_words in enumerate(parent_word_blocks, start=1):
+            parent_id = f"{source_id}_parent_{p_idx}"
+            parent_str = " ".join(p_words)
+
+            # 2. Sub-split Parent Block into Child Chunks (~150 tokens)
+            child_word_blocks = self._split_into_word_chunks(p_words, self.words_per_child, self.words_child_overlap)
+            
+            for c_idx, c_words in enumerate(child_word_blocks, start=1):
+                child_str = " ".join(c_words)
+                child_chunks.append({
+                    "chunk_id": f"{source_id}_c{global_child_idx}",
                     "source_id": source_id,
                     "file_name": file_name,
                     "source_type": source_type,
-                    "chunk_index": chunk_idx,
-                    "text": chunk_str,
-                    "word_count": len(current_words)
+                    "chunk_index": global_child_idx,
+                    "text": child_str,
+                    "parent_id": parent_id,
+                    "parent_text": parent_str,
+                    "word_count": len(c_words),
+                    "estimated_tokens": int(len(c_words) * 1.5)
                 })
-                chunk_idx += 1
-                overlap_words = current_words[-self.chunk_overlap:] if len(current_words) > self.chunk_overlap else []
-                current_words = overlap_words + para_words
-                current_len = len(current_words)
-            else:
-                current_words.extend(para_words)
-                current_len += para_len
+                global_child_idx += 1
 
-        if current_words:
-            chunk_str = " ".join(current_words)
-            chunks.append({
-                "chunk_id": f"{source_id}_chunk_{chunk_idx}",
-                "source_id": source_id,
-                "file_name": file_name,
-                "source_type": source_type,
-                "chunk_index": chunk_idx,
-                "text": chunk_str,
-                "word_count": len(current_words)
-            })
-
-        return chunks
+        return child_chunks
 
 # ---------------------------------------------------------------------------
 # 6. BGE-M3 EMBEDDER LAYER
@@ -461,6 +499,13 @@ class BGEM3Embedder:
         else:
             return [[0.0] * 1024 for _ in texts], [{}] * len(texts)
 
+    def embed_single_text(self, text: str) -> List[float]:
+        if not text or not text.strip():
+            return [0.0] * 1024
+        dense_vecs, _ = self.embed_texts([text])
+        return dense_vecs[0] if dense_vecs else [0.0] * 1024
+
+
 # ---------------------------------------------------------------------------
 # 7. CHROMA VECTOR STORE INDEXER LAYER
 # ---------------------------------------------------------------------------
@@ -472,6 +517,7 @@ class ChromaIndexer:
             metadata={"hnsw:space": "cosine", "description": "Guild Knowledge Base BGE-M3 Embeddings"}
         )
         self.embedder = BGEM3Embedder()
+        self.bm25_indexer = BM25Indexer()
 
     def index_chunks(self, chunks: List[Dict[str, Any]]):
         if not chunks:
@@ -485,13 +531,20 @@ class ChromaIndexer:
                 "file_name": c["file_name"],
                 "source_type": c["source_type"],
                 "chunk_index": c["chunk_index"],
-                "word_count": c["word_count"]
+                "word_count": c["word_count"],
+                "parent_id": c["parent_id"],
+                "parent_text": c["parent_text"]
             }
             for c in chunks
         ]
 
+        # 1. Index in ChromaDB Dense Vector Store
         dense_embeddings, _ = self.embedder.embed_texts(documents)
         self.collection.upsert(ids=ids, embeddings=dense_embeddings, documents=documents, metadatas=metadatas)
+
+        # 2. Index in BM25 Keyword Search Store
+        self.bm25_indexer.add_chunks(chunks)
+
         return len(chunks)
 
     def delete_document_chunks(self, source_id: str):
@@ -560,3 +613,4 @@ class IngestionPipeline:
         except Exception:
             pass
         gc.collect()
+

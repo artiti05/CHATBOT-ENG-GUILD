@@ -80,17 +80,29 @@ def run_server(port: int = 8000):
     uvicorn.run(app, host="0.0.0.0", port=target_port)
 
 
+def resolve_dir(dir_arg, config_default: Path) -> Path:
+    if not dir_arg:
+        return config_default
+    p = Path(dir_arg)
+    if p.is_absolute():
+        return p
+    # Check relative to workspace root vs config_default
+    if (BASE_DIR / p).exists():
+        return (BASE_DIR / p).resolve()
+    return config_default.resolve()
+
+
 def run_ingest_texts(args):
-    """Ingests text files from texts/ directory into vector database."""
+    """Ingests text files from data/texts/ directory into vector database."""
     from scripts.batch_ingest import reset_storage_db, index_texts_directory
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
     from core.config import TEXTS_DIR
 
-    texts_dir_path = (BASE_DIR / args.texts_dir).resolve() if hasattr(args, "texts_dir") and args.texts_dir else TEXTS_DIR
+    texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
 
     print("\n" + "=" * 65)
-    print(" 📝 INGESTING TEXT KNOWLEDGE BASE (texts/)")
+    print(" 📝 INGESTING TEXT KNOWLEDGE BASE (data/texts/)")
     print(f"  - Source Directory: {texts_dir_path}")
     print(f"  - Reset DB:         {not args.no_reset_db and not args.dry_run}")
     print(f"  - Dry Run:          {args.dry_run}")
@@ -106,16 +118,16 @@ def run_ingest_texts(args):
 
 
 def run_ingest_pdfs(args):
-    """Vision parses and ingests PDF files from pdfs/ directory into vector database."""
+    """Vision parses and ingests PDF files from data/pdfs/ directory into vector database."""
     from scripts.batch_ingest import reset_storage_db, parse_remaining_pdfs_gpu
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
     from core.config import PDFS_DIR
 
-    pdfs_dir_path = (BASE_DIR / args.pdfs_dir).resolve() if hasattr(args, "pdfs_dir") and args.pdfs_dir else PDFS_DIR
+    pdfs_dir_path = resolve_dir(getattr(args, "pdfs_dir", None), PDFS_DIR)
 
     print("\n" + "=" * 65)
-    print(" 📄 INGESTING PDF DOCUMENTS (pdfs/) WITH VISION VLM")
+    print(" 📄 INGESTING PDF DOCUMENTS (data/pdfs/) WITH VISION VLM")
     print(f"  - Source Directory: {pdfs_dir_path}")
     print(f"  - Reset DB:         {not args.no_reset_db and not args.dry_run}")
     print(f"  - Dry Run:          {args.dry_run}")
@@ -131,16 +143,16 @@ def run_ingest_pdfs(args):
 
 
 def run_ingest_markdown(args):
-    """Indexes pre-parsed Markdown files from output_dir/ into vector database."""
+    """Indexes pre-parsed Markdown files from data/output_dir/ & data/storage/pdf_parsed_results/ into vector database."""
     from scripts.batch_ingest import reset_storage_db, index_preparsed_markdown_files
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
-    from core.config import PARSED_OUTPUT_DIR
+    from core.config import OUTPUT_DIR
 
-    out_dir_path = (BASE_DIR / args.output_dir).resolve() if hasattr(args, "output_dir") and args.output_dir else PARSED_OUTPUT_DIR
+    out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
 
     print("\n" + "=" * 65)
-    print(" 📑 INGESTING PRE-PARSED MARKDOWN FILES (output_dir/)")
+    print(" 📑 INGESTING PRE-PARSED MARKDOWN FILES (data/output_dir/)")
     print(f"  - Source Directory: {out_dir_path}")
     print(f"  - Reset DB:         {not args.no_reset_db and not args.dry_run}")
     print(f"  - Dry Run:          {args.dry_run}")
@@ -156,17 +168,17 @@ def run_ingest_markdown(args):
 
 
 def run_ingest_kb(args):
-    """Ingests texts/ and output_dir/ pre-parsed Markdown files into vector database (skips pdfs/)."""
+    """Ingests texts/ and pre-parsed Markdown files into vector database (skips pdfs/)."""
     from scripts.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
-    from core.config import TEXTS_DIR, PARSED_OUTPUT_DIR
+    from core.config import TEXTS_DIR, OUTPUT_DIR
 
-    texts_dir_path = (BASE_DIR / args.texts_dir).resolve() if hasattr(args, "texts_dir") and args.texts_dir else TEXTS_DIR
-    out_dir_path = (BASE_DIR / args.output_dir).resolve() if hasattr(args, "output_dir") and args.output_dir else PARSED_OUTPUT_DIR
+    texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
+    out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
 
     print("\n" + "=" * 65)
-    print(" 📚 INGESTING KNOWLEDGE BASE (texts/ + output_dir/ Markdown)")
+    print(" 📚 INGESTING KNOWLEDGE BASE (data/texts/ + Markdown)")
     print(f"  - Texts Directory:   {texts_dir_path}")
     print(f"  - Markdown Directory:{out_dir_path}")
     print(f"  - Reset DB:         {not args.no_reset_db and not args.dry_run}")
@@ -188,15 +200,16 @@ def run_ingest_kb(args):
 
 
 def run_ingest_all(args):
-    """Runs complete ingestion (texts/ + output_dir/ + pdfs/)."""
+    """Runs complete ingestion (data/texts/ + data/output_dir/ + data/pdfs/)."""
     from scripts.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files, parse_remaining_pdfs_gpu
     from core.ingestion import IngestionPipeline
     from db.registry import DocumentRegistry
-    from core.config import TEXTS_DIR, PDFS_DIR, PARSED_OUTPUT_DIR
+    from core.config import TEXTS_DIR, PDFS_DIR, OUTPUT_DIR
 
-    texts_dir_path = (BASE_DIR / args.texts_dir).resolve() if hasattr(args, "texts_dir") and args.texts_dir else TEXTS_DIR
-    out_dir_path = (BASE_DIR / args.output_dir).resolve() if hasattr(args, "output_dir") and args.output_dir else PARSED_OUTPUT_DIR
-    pdfs_dir_path = (BASE_DIR / args.pdfs_dir).resolve() if hasattr(args, "pdfs_dir") and args.pdfs_dir else PDFS_DIR
+    texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
+    out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
+    pdfs_dir_path = resolve_dir(getattr(args, "pdfs_dir", None), PDFS_DIR)
+
 
     print("\n" + "=" * 65)
     print(" ⚡ FULL END-TO-END INGESTION PIPELINE (texts + markdown + pdfs)")
@@ -275,6 +288,17 @@ def run_terminal_chat(args=None):
             break
 
 
+def run_inspect_chunks(args):
+    """Runs Parent-Child Chunking Inspector and saves report to data/chunking_logs/."""
+    from scripts.inspect_chunking import inspect_file_chunking, interactive_menu
+    file_arg = getattr(args, "file", None)
+    if file_arg:
+        inspect_file_chunking(Path(file_arg))
+    else:
+        interactive_menu()
+
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Jordan Engineers Association — Arabic PDF Parser & RAG Chatbot CLI",
@@ -290,46 +314,42 @@ def main():
     serve_parser = subparsers.add_parser("serve", help="Launch FastAPI Web Chatbot UI (Default)")
     serve_parser.add_argument("--port", type=int, default=8000, help="Server port number (default: 8000)")
 
-    # 2. Ingest Knowledge Base (texts/ + output_dir/)
-    ingest_kb_parser = subparsers.add_parser("ingest-kb", help="Ingest knowledge base from texts/ and pre-parsed output_dir/ (skips pdfs/)")
-    ingest_kb_parser.add_argument("--texts-dir", type=str, default="texts", help="Path to texts directory")
-    ingest_kb_parser.add_argument("--output-dir", type=str, default="output_dir", help="Path to output_dir directory")
+    # 2. Ingest Knowledge Base (data/texts/ + data/markdowns/)
+    ingest_kb_parser = subparsers.add_parser("ingest-kb", help="Ingest knowledge base from data/texts/ and data/markdowns/ (skips un-parsed pdfs/)")
+    ingest_kb_parser.add_argument("--texts-dir", type=str, help="Path to texts directory")
+    ingest_kb_parser.add_argument("--markdowns-dir", type=str, help="Path to markdowns directory")
     ingest_kb_parser.add_argument("--no-reset-db", action="store_true", help="Do not reset vector database before indexing (Append mode)")
     ingest_kb_parser.add_argument("--dry-run", action="store_true", help="Preview file plan without modifying storage")
 
     # 3. Ingest Texts Only
-    ingest_texts_parser = subparsers.add_parser("ingest-texts", help="Ingest text knowledge base files from texts/ directory only")
-    ingest_texts_parser.add_argument("--texts-dir", type=str, default="texts", help="Path to texts directory")
+    ingest_texts_parser = subparsers.add_parser("ingest-texts", help="Ingest text knowledge base files from data/texts/ directory only")
+    ingest_texts_parser.add_argument("--texts-dir", type=str, help="Path to texts directory")
     ingest_texts_parser.add_argument("--no-reset-db", action="store_true", help="Do not reset vector database before indexing (Append mode)")
     ingest_texts_parser.add_argument("--dry-run", action="store_true", help="Preview file plan without modifying storage")
 
-    # 4. Ingest PDFs Only
-    ingest_pdfs_parser = subparsers.add_parser("ingest-pdfs", help="Vision parse and ingest PDF files from pdfs/ directory only")
-    ingest_pdfs_parser.add_argument("--pdfs-dir", type=str, default="pdfs", help="Path to pdfs directory")
-    ingest_pdfs_parser.add_argument("--no-reset-db", action="store_true", help="Do not reset vector database before indexing (Append mode)")
-    ingest_pdfs_parser.add_argument("--dry-run", action="store_true", help="Preview file plan without modifying storage")
-
-    # 5. Ingest Markdown Only
-    ingest_md_parser = subparsers.add_parser("ingest-markdown", help="Index pre-parsed Markdown files from output_dir/ directory only")
-    ingest_md_parser.add_argument("--output-dir", type=str, default="output_dir", help="Path to output_dir directory")
+    # 4. Ingest Markdowns Only
+    ingest_md_parser = subparsers.add_parser("ingest-markdowns", aliases=["ingest-markdown"], help="Index pre-parsed Markdown files from data/markdowns/ directory only")
+    ingest_md_parser.add_argument("--markdowns-dir", type=str, help="Path to markdowns directory")
     ingest_md_parser.add_argument("--no-reset-db", action="store_true", help="Do not reset vector database before indexing (Append mode)")
     ingest_md_parser.add_argument("--dry-run", action="store_true", help="Preview file plan without modifying storage")
 
+    # 5. Ingest PDFs Only
+    ingest_pdfs_parser = subparsers.add_parser("ingest-pdfs", help="Vision parse and ingest PDF files from data/pdfs/ directory only")
+    ingest_pdfs_parser.add_argument("--pdfs-dir", type=str, help="Path to pdfs directory")
+    ingest_pdfs_parser.add_argument("--no-reset-db", action="store_true", help="Do not reset vector database before indexing (Append mode)")
+    ingest_pdfs_parser.add_argument("--dry-run", action="store_true", help="Preview file plan without modifying storage")
+
     # 6. Ingest All
-    ingest_all_parser = subparsers.add_parser("ingest-all", help="Run full end-to-end ingestion (texts/ + output_dir/ + pdfs/)")
-    ingest_all_parser.add_argument("--texts-dir", type=str, default="texts", help="Path to texts directory")
-    ingest_all_parser.add_argument("--output-dir", type=str, default="output_dir", help="Path to output_dir directory")
-    ingest_all_parser.add_argument("--pdfs-dir", type=str, default="pdfs", help="Path to pdfs directory")
+    ingest_all_parser = subparsers.add_parser("ingest-all", aliases=["ingest"], help="Run full end-to-end ingestion (data/texts/ + data/markdowns/ + data/pdfs/)")
+    ingest_all_parser.add_argument("--texts-dir", type=str, help="Path to texts directory")
+    ingest_all_parser.add_argument("--markdowns-dir", type=str, help="Path to markdowns directory")
+    ingest_all_parser.add_argument("--pdfs-dir", type=str, help="Path to pdfs directory")
     ingest_all_parser.add_argument("--no-reset-db", action="store_true", help="Do not reset vector database before indexing (Append mode)")
     ingest_all_parser.add_argument("--dry-run", action="store_true", help="Preview file plan without modifying storage")
 
-    # Legacy fallback for `ingest` -> maps to `ingest-all`
-    ingest_parser = subparsers.add_parser("ingest", help="Alias for ingest-all")
-    ingest_parser.add_argument("--texts-dir", type=str, default="texts")
-    ingest_parser.add_argument("--output-dir", type=str, default="output_dir")
-    ingest_parser.add_argument("--pdfs-dir", type=str, default="pdfs")
-    ingest_parser.add_argument("--no-reset-db", action="store_true")
-    ingest_parser.add_argument("--dry-run", action="store_true")
+    # 7. Inspect Chunking
+    inspect_parser = subparsers.add_parser("inspect-chunks", aliases=["inspect-chunking"], help="Inspect document Parent-Child chunking and save report to data/chunking_logs/")
+    inspect_parser.add_argument("--file", "-f", type=str, help="Path to text or markdown file to inspect")
 
     # Default if no arguments specified: `python main.py` -> `run_server()`
     if len(sys.argv) == 1:
@@ -346,15 +366,18 @@ def main():
         run_ingest_kb(args)
     elif args.command == "ingest-texts":
         run_ingest_texts(args)
+    elif args.command in ["ingest-markdowns", "ingest-markdown"]:
+        run_ingest_markdown(args)
     elif args.command == "ingest-pdfs":
         run_ingest_pdfs(args)
-    elif args.command == "ingest-markdown":
-        run_ingest_markdown(args)
     elif args.command in ["ingest-all", "ingest"]:
         run_ingest_all(args)
+    elif args.command in ["inspect-chunks", "inspect-chunking"]:
+        run_inspect_chunks(args)
     else:
         run_server(port=8000)
 
 
 if __name__ == "__main__":
     main()
+

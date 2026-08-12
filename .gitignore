@@ -12,10 +12,14 @@ env/
 .venv/
 
 # Local Storage, Vector DB & Caches
-storage/chroma_db/
-storage/registry.db
-storage/crawler_cache/
+data/storage/
+data/output_dir/
+data/chunking_logs/
+data/crawler/
+data/new_uploads/
+storage/
 *.log
+*.pkl
 
 # IDE & OS generated files
 .vscode/

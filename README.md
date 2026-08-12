@@ -29,8 +29,11 @@ The Jordan Engineers Association manages an extensive collection of legal bylaws
 
 1. **Vision-Based Document Parsing**: Uses OpenCV CLAHE image enhancement and **Qwen2.5-VL** (via Ollama or LM Studio) to transcribe Arabic prose and format complex nested RTL tables as HTML `<table>` elements with accurate `colspan` and `rowspan`.
 2. **Jordanian Dialect Normalization**: Translates colloquial Jordanian phrases (e.g., *"شو الأوراق"*, *"بدي أسجل"*, *"قديش الإشتراك"*) into formal Modern Standard Arabic (MSA) search terms for accurate semantic retrieval.
-3. **Hybrid Retrieval & Reranking**: Combines dense vector similarity search in **ChromaDB** with a cross-encoder reranker (**BAAI/bge-reranker-v2-m3**) to score top relevance matches.
-4. **FastAPI Web UI & Rest API**: Provides an ambient dark-mode web application and secure API endpoints protected by header authentication.
+3. **Hybrid Retrieval & Reranking (Dense + Arabic BM25 + RRF $k=60$)**: Combines dense vector similarity search in **ChromaDB (BGE-M3)** with sparse keyword search (**Arabic Normalized BM25**) fused via Reciprocal Rank Fusion ($k=60$), then reranks results using **BAAI/bge-reranker-v2-m3** with a strict 50% quality floor.
+4. **Hierarchical Parent-Child Chunking**: Indexes granular **Child Chunks (~150 tokens)** for high-precision retrieval while providing rich **Parent Context Blocks (~800 tokens)** to the LLM for answer synthesis.
+5. **FastAPI Web UI & REST API**: Provides an ambient dark-mode web application and secure API endpoints protected by header authentication.
+6. **Agentic Multi-Agent StateGraph & CRAG Reflexion**: Orchestrates 6 specialized subagents in a state machine (`core/graph.py`) with automatic query expansion and self-correction loops when retrieval confidence is low.
+
 
 ---
 
@@ -38,25 +41,51 @@ The Jordan Engineers Association manages an extensive collection of legal bylaws
 
 ```
 CHATBOT-ENG-GUILD/
-├── app.py                      # FastAPI Web Application & UI Server
-├── main.py                     # Unified Multi-Mode CLI Launcher
-├── rag_chatbot_engine.py       # RAG Retriever, Cross-Encoder Reranker & Jordanian Normalizer
-├── ingestion_pipeline.py       # Qwen2.5-VL Vision Parser, Text Cleaner, Chunker & Indexer
-├── crawler_admin.py            # SQLite Document Registry & Admin Manager
-├── batch_ingest.py             # Batch Ingestion Utilities & Database Management
-├── config/
-│   └── settings.py             # Global Configuration & Model Settings
-├── texts/                      # 430+ Categorized Markdown Knowledge Base files
-├── pdfs/                       # Source PDF Documents directory
-├── output_dir/                 # Pre-parsed Markdown files & output artifacts
-└── storage/                    # Persistent Storage
-    ├── registry.db             # SQLite document status registry
-    └── chroma_db/              # Persistent ChromaDB vector database
+├── main.py                     # Entry point & CLI launcher
+│
+├── api/                        # FastAPI Web Server & REST API endpoints
+│
+├── core/                       # Core AI & RAG Engine Modules
+│   ├── agents/                 # Agentic Multi-Agent System (6 Subagents)
+│   │   ├── retriever_agent.py  # Retriever Agent (Hybrid Dense + Arabic BM25 + RRF k=60)
+│   │   ├── reranker_agent.py   # Reranker Agent (Cross-Encoder 50% Floor & Priority Boost)
+│   │   ├── rewriter_agent.py   # Dialect Rewriter Agent (Multi-Turn Synthesis & Dialect-to-MSA)
+│   │   ├── verifier_agent.py   # Verifier Agent (CRAG Reflexion & Groundedness Checker)
+│   │   ├── generator_agent.py # Response Generator Agent (Persona & Stream Handler)
+│   │   └── cache_agent.py      # Semantic Query Cache Agent (< 10ms Latency)
+│   ├── bm25_search.py          # Arabic Sparse Keyword Search Indexer
+│   ├── config.py               # Global Settings, Paths & Hyperparameters
+│   ├── graph.py                # Agentic Multi-Agent StateGraph Orchestrator
+│   ├── ingestion.py            # Vision PDF Parser & Parent-Child Chunker
+│   └── rag_engine.py           # RAG Chatbot Coordinator (Delegates to RAGStateGraph)
+│
+├── data/                       # Unified Storage & Knowledge Directory
+│   ├── texts/                  # 430+ Raw Text KB files (.md, .txt)
+│   ├── markdowns/              # Clean pre-parsed PDF Markdown files (*_parsed.md)
+│   ├── pdfs/                   # Un-parsed source PDF documents
+│   ├── output_dir/             # PDF Vision Parser debug artifacts & page images
+│   ├── chunking_logs/          # Chunk inspection reports (JSON)
+│   ├── crawler/                # Web crawler cache & crawled documents
+│   └── storage/                # ChromaDB vector store, BM25 index & SQLite registry
+│
+└── scripts/                    # Utilities, Benchmarks & Test Suites
+    ├── batch_ingest.py         # Batch Ingestion Manager
+    ├── consolidate_markdowns.py # Data Directory Consolidation Helper
+    ├── inspect_chunking.py     # Document Parent-Child Chunk Inspector
+    ├── test_pipeline.py        # Multi-Agent Pipeline Regression Benchmark Suite
+    ├── verify_rag_retrieval.py # RAG Retrieval Layer Test Suite
+    ├── verify_agentic_context.py # Multi-Turn & Agentic CRAG Test Suite
+    ├── verify_performance_cache.py # Semantic Cache & Latency Test Suite
+    └── verify_agentic_graph.py # Agentic StateGraph & Reflexion Test Suite
 ```
 
+
+
 ### Storage Architecture
-- **SQLite Registry ([`storage/registry.db`](file:///c:/Users/VICTUS/Desktop/CHATBOT-ENG-GUILD/storage/registry.db))**: Tracks document metadata, hashes, file types, page counts, parsing status (`active`/`excluded`), and execution timestamps.
-- **ChromaDB Store ([`storage/chroma_db`](file:///c:/Users/VICTUS/Desktop/CHATBOT-ENG-GUILD/storage/chroma_db))**: Persists dense vector embeddings under collection `guild_knowledge_base`.
+- **SQLite Registry (`data/storage/registry.db`)**: Tracks document metadata, SHA-256 hashes, file types, page counts, and parsing statuses.
+- **ChromaDB Store (`data/storage/chroma_db`)**: Persists dense vector embeddings under collection `guild_knowledge_base`.
+- **BM25 Store (`data/storage/bm25_index.pkl`)**: Persists Arabic sparse keyword index.
+
 
 ---
 
@@ -108,7 +137,8 @@ ollama serve
 
 ##  How to Run
 
-All execution modes are controlled through the unified entry point [`main.py`]
+All execution modes are controlled through the unified entry point `main.py`:
+
 
 ### Launch the Web Application & Chatbot UI
 ```powershell
@@ -122,46 +152,32 @@ Open your browser at **`http://localhost:8000`** *(automatically detects alterna
 
 ##  Knowledge Base Handling & Ingestion
 
-The system ingests three primary types of knowledge sources:
+The system ingests knowledge sources from standardized folders inside `data/`:
 
 | Source Directory | Format | Content Description | Ingestion Method |
 | :--- | :--- | :--- | :--- |
-| **`texts/`** | `.md` / `.txt` | 430+ text knowledge files (Insurance, Registration, Laws, Services) | Text Cleaning & Semantic Chunking |
-| **`pdfs/`** | `.pdf` | Official PDF publications, complex multi-header tables, legal decrees | Qwen2.5-VL Vision Parsing + OCR |
-| **`output_dir/`** | `.md` | Pre-parsed Markdown files extracted from vision pipelines | Markdown Indexer |
+| **`data/texts/`** | `.md` / `.txt` | 430+ text knowledge files (Insurance, Laws, Services) | Text Cleaning & Parent-Child Token Chunking |
+| **`data/markdowns/`** | `.md` | Pre-parsed Markdown files (`*_parsed.md`) from PDF Vision OCR | Fast Markdown Indexer (No GPU needed) |
+| **`data/pdfs/`** | `.pdf` | Official source PDF publications | Qwen2.5-VL Vision Parsing + OCR |
+| **`data/output_dir/`** | Artifacts | Visual page images, table debug crops, per-page text & PDF copies | Output Artifact Storage |
 
-### CLI Ingestion Commands
+---
 
-* **Ingest Knowledge Base (`texts/` + `output_dir/` Markdown, Skips `pdfs/`):**
-  ```powershell
-  python main.py ingest-kb
-  ```
-  *(Add `--no-reset-db` to append without wiping existing vectors)*.
+### 📥 CLI Ingestion Commands Reference Table
 
-* **Ingest Text Knowledge Base (`texts/` Only):**
-  ```powershell
-  python main.py ingest-texts --no-reset-db
-  ```
+| Ingestion Command | Target Directory | Description & Purpose | GPU / VLM Needed? | DB Reset Default | Key Flags |
+| :--- | :--- | :--- | :---: | :---: | :--- |
+| **`python main.py ingest-kb`** | `data/texts/`<br>`data/markdowns/` | **Recommended Build**: Embeds all raw text files and pre-parsed markdowns into ChromaDB + BM25. Skips PDF parsing. | ❌ No |  Wipes DB | `--no-reset-db`<br>`--dry-run` |
+| **`python main.py ingest-texts`** | `data/texts/` | Ingests only raw text knowledge base files (`.md`, `.txt`) from `data/texts/`. | ❌ No |  Wipes DB | `--no-reset-db`<br>`--dry-run` |
+| **`python main.py ingest-markdowns`** | `data/markdowns/` | Ingests only pre-parsed Markdown documents (`*_parsed.md`). | ❌ No |  Wipes DB | `--no-reset-db`<br>`--dry-run` |
+| **`python main.py ingest-pdfs`** | `data/pdfs/` | Scans `data/pdfs/` for un-parsed source PDFs and runs OpenCV table detection + Qwen2.5-VL Vision parsing. |  Yes |  Wipes DB | `--no-reset-db`<br>`--dry-run` |
+| **`python main.py ingest-all`** | `data/texts/`<br>`data/markdowns/`<br>`data/pdfs/` | **Full End-to-End Build**: Ingests texts, pre-parsed markdowns, and vision-parses any un-parsed source PDFs in `data/pdfs/`. |  (PDFs only) |  Wipes DB | `--no-reset-db`<br>`--dry-run` |
+| **`python main.py inspect-chunks`** | `data/markdowns/`<br>`data/texts/` | Interactive or file-specific Parent-Child token chunking inspector. Saves JSON report to `data/chunking_logs/`. | ❌ No | N/A (Read-only) | `--file <path>` |
 
-* **Ingest Pre-Parsed Markdown (`output_dir/` Only):**
-  ```powershell
-  python main.py ingest-markdown --no-reset-db
-  ```
+#### Flag Descriptions:
+- **`--no-reset-db`** *(Append Mode)*: Appends vectors to the existing ChromaDB collection without wiping previously indexed documents.
+- **`--dry-run`** *(Preview Mode)*: Previews file counts, chunk counts, and execution plan without modifying database storage or loading GPU models.
 
-* **Ingest PDF Documents (`pdfs/` Only):**
-  ```powershell
-  python main.py ingest-pdfs --no-reset-db
-  ```
-
-* **Full End-to-End Ingestion (All Sources):**
-  ```powershell
-  python main.py ingest-all
-  ```
-
-* **Preview Ingestion Plan (Dry Run):**
-  ```powershell
-  python main.py ingest-all --dry-run
-  ```
 
 > ⚠️ **Important Safety Rule:** Do not run ingestion scripts while a live Web API server is performing heavy write operations on `storage/chroma_db` to avoid lock contention.
 
@@ -349,6 +365,23 @@ except requests.exceptions.RequestException as e:
 | `BGE_RERANKER_MODEL_NAME` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranking model |
 | `OLLAMA_CHAT_MODEL` | `qwen2.5:7b` | Primary Ollama LLM for conversational responses |
 | `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Ollama VLM for Arabic PDF visual table parsing |
+
+---
+
+## 📊 Master Feature Comparison Matrix
+
+| Feature Module | Legacy Baseline | SOTA GitHub Baseline (2025/2026) | Current Upgraded System | Status |
+| :--- | :--- | :--- | :--- | :---: |
+| **Retrieval Strategy** | Pure Dense Search (ChromaDB) | Hybrid Search: Dense + BM25 + RRF | **Hybrid Search (ChromaDB + Arabic BM25 + RRF $k=60$)** |  Resolved |
+| **Query Processing** | Hardcoded if/elif regex list (~20 rules) | HyDE & Multi-Query LLM Rewrite | **LLM Dialect Rewriter (Levantine/Gulf/Egyptian $\rightarrow$ MSA)** |  Resolved |
+| **Multi-Turn Context** | Raw text appended post-retrieval | Standalone Query Rewriter | **Standalone Query Synthesis before retrieval** |  Resolved |
+| **Chunking Architecture** | Fixed word-count chunking (700-950 tokens) | Parent-Child / Hierarchical Chunking | **Token-accurate Parent-Child Chunking (~800/~150 tokens)** |  Resolved |
+| **Orchestration** | Single linear script | Agentic State Graph (LangGraph) | **Agentic StateGraph System (6 Subagents in `core/graph.py`)** |  Resolved |
+| **Self-Correction** | Static relevance cutoff threshold | CRAG / Self-RAG Reflection Loops | **CRAG Verifier + Groundedness Check + Re-retrieval Loop** |  Resolved |
+| **Performance / Caching** | None (full pipeline on every query) | Semantic Vector Cache | **In-Memory & Persisted Cosine Semantic Cache (<10ms for hits)** |  Resolved |
+| **Knowledge Graph** | None | GraphRAG / LightRAG | **Vector + BM25 Hybrid (KG optional for future scale)** | 🟡 Optional |
+| **Evaluation** | Manual inspection script | Automated RAGAS / DeepEval | **Pipeline Benchmark Suite (`scripts/test_pipeline.py`)** |  Resolved |
+
 | `CHUNK_SIZE_TOKENS` | `300` | Target chunk size (300 tokens ~ 200–220 words) |
 | `CHUNK_OVERLAP_TOKENS` | `40` | Token overlap for chunk boundaries |
 
