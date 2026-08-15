@@ -152,6 +152,7 @@ class DialectRewriterAgent:
                 "model": self.model,
                 "prompt": prompt,
                 "stream": False,
+                "think": False,  # thinking models blow the timeout on this simple task
                 "keep_alive": OLLAMA_KEEP_ALIVE,
                 "options": {
                     "temperature": 0.1,
@@ -159,7 +160,7 @@ class DialectRewriterAgent:
                     "num_ctx": NUM_CTX
                 }
             }
-            res = requests.post(self.ollama_url, json=payload, timeout=(3.0, 10.0))
+            res = requests.post(self.ollama_url, json=payload, timeout=(3.0, 8.0))
             if res.status_code == 200:
                 rewritten_text = res.json().get("response", "").strip()
                 rewritten_text = re.sub(r'^["\'\s]+|["\'\s]+$', '', rewritten_text).strip()

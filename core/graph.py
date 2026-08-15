@@ -1,5 +1,6 @@
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Tuple, Optional, TypedDict
 
 from core.agents.cache_agent import SemanticCacheAgent
@@ -8,6 +9,25 @@ from core.agents.retriever_agent import RetrieverAgent
 from core.agents.reranker_agent import RerankerAgent
 from core.agents.generator_agent import ResponseGeneratorAgent
 from core.agents.verifier_agent import VerifierAgent
+from core.config import EXPOSE_DEBUG_METADATA
+
+# Agent-internal keys that describe the pipeline's reasoning. They are useful
+# for debugging but must not be shipped to end-user clients, where a generic
+# renderer would display them as if they were part of the answer.
+_DEBUG_ONLY_KEYS = (
+    "rewrite_metadata",
+    "crag_metadata",
+    "verification_metadata",
+    "reflexion_count",
+    "standalone_query",
+)
+
+
+def sanitize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Strips agent-internal reasoning metadata unless EXPOSE_DEBUG_METADATA."""
+    if EXPOSE_DEBUG_METADATA:
+        return payload
+    return {k: v for k, v in payload.items() if k not in _DEBUG_ONLY_KEYS}
 
 
 class AgentState(TypedDict, total=False):
@@ -41,6 +61,28 @@ class RAGStateGraph:
         self.reranker_agent = RerankerAgent()
         self.generator_agent = ResponseGeneratorAgent()
         self.verifier_agent = VerifierAgent()
+
+    def _expand_and_merge(self, standalone_q: str, base_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """CRAG expansion: runs alternative-query retrieval+rerank rounds IN PARALLEL
+        and merges deduplicated results into base_sources (mutated in place)."""
+        expansions = self.verifier_agent.generate_query_expansions(standalone_q)
+        if not expansions:
+            return base_sources
+
+        def _one_round(exp_q: str) -> List[Dict[str, Any]]:
+            extra_cands = self.retriever_agent.retrieve_hybrid(exp_q, top_k=5)
+            return self.reranker_agent.rerank(exp_q, extra_cands, top_k=5)
+
+        with ThreadPoolExecutor(max_workers=min(len(expansions), 3)) as pool:
+            rounds = list(pool.map(_one_round, expansions))
+
+        existing_ids = {s.get("chunk_id") for s in base_sources}
+        for extra_reranked in rounds:
+            for s in extra_reranked:
+                if s.get("chunk_id") not in existing_ids:
+                    base_sources.append(s)
+                    existing_ids.add(s.get("chunk_id"))
+        return base_sources
 
     def _detect_accent(self, query: str) -> str:
         q = query.strip()
@@ -78,8 +120,12 @@ class RAGStateGraph:
         standalone_q, rewrite_meta = self.rewriter_agent.rewrite_query(q, history=hist)
         accent = self._detect_accent(q)
 
+        # Reuse the query embedding computed during the cache check when the
+        # rewriter did not change the query (avoids a duplicate BGE-M3 pass).
+        reuse_vec = getattr(self.cache_agent, "last_query_vec", None) if standalone_q == q else None
+
         # NODE 3: Hybrid Retrieval (Dense BGE-M3 + Sparse BM25 + RRF k=60)
-        candidates = self.retriever_agent.retrieve_hybrid(standalone_q, top_k=min(top_k * 2, 30))
+        candidates = self.retriever_agent.retrieve_hybrid(standalone_q, top_k=min(top_k * 2, 30), query_vec=reuse_vec)
 
         # NODE 4: Reranking & Strict Cutoff Floor
         reranked_sources = self.reranker_agent.rerank(standalone_q, candidates, top_k=top_k)
@@ -96,15 +142,7 @@ class RAGStateGraph:
 
         # REFLEXION LOOP 1: Initial Query Expansion if retrieval confidence is low
         if crag_eval["confidence_low"]:
-            expansions = self.verifier_agent.generate_query_expansions(standalone_q)
-            existing_ids = {s.get("chunk_id") for s in reranked_sources}
-            for exp_q in expansions:
-                extra_cands = self.retriever_agent.retrieve_hybrid(exp_q, top_k=5)
-                extra_reranked = self.reranker_agent.rerank(exp_q, extra_cands, top_k=5)
-                for s in extra_reranked:
-                    if s.get("chunk_id") not in existing_ids:
-                        reranked_sources.append(s)
-                        existing_ids.add(s.get("chunk_id"))
+            reranked_sources = self._expand_and_merge(standalone_q, reranked_sources)
             reranked_sources = sorted(reranked_sources, key=lambda x: x.get("similarity_score", 0), reverse=True)[:top_k]
             reflexion_count += 1
 
@@ -114,7 +152,7 @@ class RAGStateGraph:
                 "english": "Sorry, no relevant documents were found in the knowledge base.",
                 "msa": "لم يتم العثور على وثائق أو مصادر مرتبطة بسؤالك في قاعدة المعرفة."
             }
-            return {
+            return sanitize_payload({
                 "query": q,
                 "standalone_query": standalone_q,
                 "answer": no_sources_msg.get(accent, no_sources_msg["msa"]),
@@ -123,19 +161,19 @@ class RAGStateGraph:
                 "rewrite_metadata": rewrite_meta,
                 "crag_metadata": crag_eval,
                 "time_taken": round(time.time() - start_time, 2)
-            }
+            })
 
         # NODE 5: Grounded Response Generation
         prompt_str, included_sources = self.generator_agent.build_prompt(q, standalone_q, reranked_sources, detected_accent=accent)
         if not included_sources:
-            return {
+            return sanitize_payload({
                 "query": q,
                 "standalone_query": standalone_q,
                 "answer": "لا تتوفر معلومات كافية في قاعدة المعرفة للإجابة على هذا السؤال بدقة.",
                 "sources": [],
                 "cache_hit": False,
                 "time_taken": round(time.time() - start_time, 2)
-            }
+            })
 
         generated_answer, llm_connected = self.generator_agent.generate(prompt_str)
         if not generated_answer:
@@ -146,15 +184,7 @@ class RAGStateGraph:
 
         # REFLEXION LOOP 2: Secondary re-retrieval if groundedness is low (< 65%)
         if not verification.get("is_grounded") and verification.get("score", 0) < 65.0 and reflexion_count < 2:
-            expansions = self.verifier_agent.generate_query_expansions(standalone_q)
-            existing_ids = {s.get("chunk_id") for s in included_sources}
-            for exp_q in expansions:
-                extra_cands = self.retriever_agent.retrieve_hybrid(exp_q, top_k=5)
-                extra_reranked = self.reranker_agent.rerank(exp_q, extra_cands, top_k=5)
-                for s in extra_reranked:
-                    if s.get("chunk_id") not in existing_ids:
-                        included_sources.append(s)
-                        existing_ids.add(s.get("chunk_id"))
+            included_sources = self._expand_and_merge(standalone_q, included_sources)
 
             # Re-generate with updated sources
             prompt_str_2, included_sources = self.generator_agent.build_prompt(q, standalone_q, included_sources, detected_accent=accent)
@@ -185,7 +215,7 @@ class RAGStateGraph:
         if not hist or len(hist) == 0:
             self.cache_agent.put(q, res_payload)
 
-        return res_payload
+        return sanitize_payload(res_payload)
 
     def run_stream(self, query: str, history: Optional[List[Dict[str, str]]] = None, top_k: int = 5):
         """Executes real-time SSE streaming StateGraph workflow."""
@@ -212,7 +242,7 @@ class RAGStateGraph:
                     "cache_hit": True,
                     "time_taken_ms": cached_res.get("time_taken_ms", 0.0)
                 }
-                yield f"data: {json.dumps(meta_event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(sanitize_payload(meta_event), ensure_ascii=False)}\n\n"
                 answer_text = cached_res.get("answer", "")
                 token_event = {"type": "token", "token": answer_text}
                 yield f"data: {json.dumps(token_event, ensure_ascii=False)}\n\n"
@@ -223,8 +253,11 @@ class RAGStateGraph:
         standalone_q, rewrite_meta = self.rewriter_agent.rewrite_query(q, history=hist)
         accent = self._detect_accent(q)
 
+        # Reuse cache-check embedding when the rewriter left the query unchanged
+        reuse_vec = getattr(self.cache_agent, "last_query_vec", None) if standalone_q == q else None
+
         # NODE 3: Hybrid Retrieval
-        candidates = self.retriever_agent.retrieve_hybrid(standalone_q, top_k=min(top_k * 2, 30))
+        candidates = self.retriever_agent.retrieve_hybrid(standalone_q, top_k=min(top_k * 2, 30), query_vec=reuse_vec)
 
         # NODE 4: Reranking
         reranked_sources = self.reranker_agent.rerank(standalone_q, candidates, top_k=top_k)
@@ -235,15 +268,7 @@ class RAGStateGraph:
 
         crag_eval = self.verifier_agent.evaluate_retrieval_confidence(reranked_sources)
         if crag_eval["confidence_low"]:
-            expansions = self.verifier_agent.generate_query_expansions(standalone_q)
-            existing_ids = {s.get("chunk_id") for s in reranked_sources}
-            for exp_q in expansions:
-                extra_cands = self.retriever_agent.retrieve_hybrid(exp_q, top_k=5)
-                extra_reranked = self.reranker_agent.rerank(exp_q, extra_cands, top_k=5)
-                for s in extra_reranked:
-                    if s.get("chunk_id") not in existing_ids:
-                        reranked_sources.append(s)
-                        existing_ids.add(s.get("chunk_id"))
+            reranked_sources = self._expand_and_merge(standalone_q, reranked_sources)
             reranked_sources = sorted(reranked_sources, key=lambda x: x.get("similarity_score", 0), reverse=True)[:top_k]
 
         prompt_str, included_sources = self.generator_agent.build_prompt(q, standalone_q, reranked_sources, detected_accent=accent)
@@ -259,7 +284,7 @@ class RAGStateGraph:
             "cache_hit": False,
             "time_taken": round(time.time() - start_time, 2)
         }
-        yield f"data: {json.dumps(meta_event, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps(sanitize_payload(meta_event), ensure_ascii=False)}\n\n"
 
         if not included_sources:
             no_info = "لا تتوفر معلومات كافية في قاعدة المعرفة للإجابة على هذا السؤال بدقة."

@@ -38,6 +38,7 @@ class SemanticCacheAgent:
         self.persist_path = Path(persist_path)
         self.embedder = BGEM3Embedder()
         self.cache: List[Dict[str, Any]] = []
+        self.last_query_vec: Optional[List[float]] = None
         self._load_cache()
         # Warmup embedder model once on init to eliminate PyTorch first-run JIT latency
         if self.embedder.model:
@@ -70,7 +71,10 @@ class SemanticCacheAgent:
         Returns cached response dict if cosine similarity >= 0.95, else returns None.
         """
         q = query.strip()
-        if not q or not self.cache:
+        # Always compute (and expose) the query vector so downstream retrieval
+        # can reuse it instead of re-embedding the same query.
+        self.last_query_vec: Optional[List[float]] = None
+        if not q:
             return None
 
         start_time = time.time()
@@ -78,18 +82,27 @@ class SemanticCacheAgent:
         query_vec = self.embedder.embed_single_text(q)
         if not query_vec:
             return None
+        self.last_query_vec = query_vec
 
-        best_score = -1.0
-        best_entry = None
+        if not self.cache:
+            return None
 
-        for entry in self.cache:
-            cached_vec = entry.get("vector")
-            if not cached_vec:
-                continue
-            sim = cosine_similarity_vec(query_vec, cached_vec)
-            if sim > best_score:
-                best_score = sim
-                best_entry = entry
+        # Vectorized cosine scan: single matrix op instead of a Python loop
+        q_arr = np.array(query_vec, dtype=np.float32)
+        q_norm = np.linalg.norm(q_arr)
+        if q_norm == 0:
+            return None
+
+        entries = [e for e in self.cache if e.get("vector")]
+        if not entries:
+            return None
+        mat = np.array([e["vector"] for e in entries], dtype=np.float32)
+        norms = np.linalg.norm(mat, axis=1)
+        norms[norms == 0] = 1e-9
+        sims = (mat @ q_arr) / (norms * q_norm)
+        best_idx = int(np.argmax(sims))
+        best_score = float(sims[best_idx])
+        best_entry = entries[best_idx]
 
         if best_score >= self.similarity_threshold and best_entry:
             elapsed = round((time.time() - start_time) * 1000, 2)  # In milliseconds

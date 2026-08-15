@@ -99,6 +99,11 @@ CHUNK_OVERLAP_TOKENS = CHILD_OVERLAP_TOKENS
 # Multi-Stage Ingestion Pipeline & Ollama Settings
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
+
+# When False (default), agent internals (rewrite/crag/verification metadata,
+# reflexion counts) are stripped from API responses and SSE meta events so
+# reasoning never reaches the end-user UI. Set EXPOSE_DEBUG_METADATA=true for dev.
+EXPOSE_DEBUG_METADATA = os.getenv("EXPOSE_DEBUG_METADATA", "false").lower() in ("1", "true", "yes")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "ministral-3:8b")
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 
@@ -112,8 +117,10 @@ TABLE_CROP_PADDING = 10
 OLLAMA_KEEP_ALIVE = -1 if os.getenv("OLLAMA_KEEP_ALIVE", "-1") == "-1" else os.getenv("OLLAMA_KEEP_ALIVE")
 
 REQUEST_TIMEOUT = 300
-NUM_CTX = 8192
-NUM_PREDICT = 4096
+NUM_CTX = int(os.getenv("NUM_CTX", "8192"))
+# 4096 allowed runaway generations to burn ~4x the tokens a cited JEA answer
+# needs; 1280 covers long multi-source Arabic answers while capping worst-case latency.
+NUM_PREDICT = int(os.getenv("NUM_PREDICT", "1280"))
 
 VLM_MODEL_NAME = "llava:latest"
 USE_CAMELOT_TABLES = True

@@ -290,7 +290,10 @@ def call_vlm_vision_api(prompt: str, img_b64: str) -> str:
         resp = requests.post(OLLAMA_URL, json=payload, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("response", "").strip()
+        # Thinking-capable VLMs (e.g. Qwen3.6) prepend <think> traces; strip them
+        # so reasoning is never baked into parsed markdown / the knowledge base.
+        from core.agents.generator_agent import strip_reasoning
+        return strip_reasoning(data.get("response", "").strip())
     except Exception as e:
         print(f"[VLM Ollama Error]: {e}")
         return f"[ERROR calling Vision VLM: {e}]"

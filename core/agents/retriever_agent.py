@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
@@ -22,63 +23,83 @@ class RetrieverAgent:
         self.embedder = BGEM3Embedder()
         self.bm25 = BM25Indexer()
 
-    def retrieve_hybrid(self, query: str, top_k: int = 20, rrf_k: int = 60) -> List[Dict[str, Any]]:
+    def retrieve_hybrid(self, query: str, top_k: int = 20, rrf_k: int = 60,
+                        query_vec: Optional[List[float]] = None) -> List[Dict[str, Any]]:
         """
         Executes hybrid retrieval:
         - Fetches top_k candidates from ChromaDB Dense Search.
         - Fetches top_k candidates from BM25 Sparse Search.
+        - Dense (GPU) and BM25 (CPU) run CONCURRENTLY.
         - Fuses rankings using RRF formula.
+        query_vec: optional precomputed BGE-M3 dense vector for the query
+        (e.g. reused from the semantic cache check) to avoid re-embedding.
         Returns unified list of top candidate chunks.
         """
         if not query or not query.strip():
             return []
 
-        # 1. Dense Search
-        dense_candidates: List[Dict[str, Any]] = []
-        try:
-            dense_vecs, _ = self.embedder.embed_texts([query])
-            if dense_vecs:
-                results = self.collection.query(
-                    query_embeddings=[dense_vecs[0]],
-                    n_results=min(top_k * 2, 30),
-                    include=["documents", "metadatas", "distances"]
-                )
-                if results and results.get("documents") and results["documents"][0]:
-                    docs = results["documents"][0]
-                    metas = results["metadatas"][0]
-                    dists = results["distances"][0]
-                    ids = results["ids"][0] if "ids" in results else [f"dense_{i}" for i in range(len(docs))]
+        def _dense_search() -> List[Dict[str, Any]]:
+            dense_candidates: List[Dict[str, Any]] = []
+            try:
+                if query_vec is not None:
+                    qv = query_vec
+                else:
+                    dense_vecs, _ = self.embedder.embed_texts([query])
+                    qv = dense_vecs[0] if dense_vecs else None
+                if qv is not None:
+                    results = self.collection.query(
+                        query_embeddings=[qv],
+                        n_results=min(top_k * 2, 30),
+                        include=["documents", "metadatas", "distances"]
+                    )
+                    if results and results.get("documents") and results["documents"][0]:
+                        docs = results["documents"][0]
+                        metas = results["metadatas"][0]
+                        dists = results["distances"][0]
+                        ids = results["ids"][0] if "ids" in results else [f"dense_{i}" for i in range(len(docs))]
 
-                    for i in range(len(docs)):
-                        meta = metas[i] if i < len(metas) else {}
-                        dense_candidates.append({
-                            "chunk_id": ids[i],
-                            "text": docs[i],
-                            "title": meta.get("file_name", "وثيقة"),
-                            "section_title": f"جزء {meta.get('chunk_index', 1)}",
-                            "distance": dists[i],
-                            "parent_id": meta.get("parent_id", ""),
-                            "parent_text": meta.get("parent_text", docs[i]),
-                            "metadata": meta
-                        })
-        except Exception as e:
-            print(f"[Retriever Warning] Dense search failed: {e}")
+                        for i in range(len(docs)):
+                            meta = metas[i] if i < len(metas) else {}
+                            dense_candidates.append({
+                                "chunk_id": ids[i],
+                                "text": docs[i],
+                                "title": meta.get("file_name", "وثيقة"),
+                                "section_title": f"جزء {meta.get('chunk_index', 1)}",
+                                "distance": dists[i],
+                                "parent_id": meta.get("parent_id", ""),
+                                "parent_text": meta.get("parent_text", docs[i]),
+                                "metadata": meta
+                            })
+            except Exception as e:
+                print(f"[Retriever Warning] Dense search failed: {e}")
+            return dense_candidates
 
-        # 2. BM25 Sparse Search
-        bm25_raw_results = self.bm25.search(query, top_k=top_k)
-        bm25_candidates: List[Dict[str, Any]] = []
-        for chunk_item, score in bm25_raw_results:
-            meta = chunk_item.get("metadata", {})
-            bm25_candidates.append({
-                "chunk_id": chunk_item.get("chunk_id", f"bm25_{len(bm25_candidates)}"),
-                "text": chunk_item.get("text", ""),
-                "title": meta.get("file_name", "وثيقة"),
-                "section_title": f"جزء {meta.get('chunk_index', 1)}",
-                "bm25_score": score,
-                "parent_id": chunk_item.get("parent_id", ""),
-                "parent_text": chunk_item.get("parent_text", chunk_item.get("text", "")),
-                "metadata": meta
-            })
+        def _sparse_search() -> List[Dict[str, Any]]:
+            bm25_candidates: List[Dict[str, Any]] = []
+            try:
+                bm25_raw_results = self.bm25.search(query, top_k=top_k)
+                for chunk_item, score in bm25_raw_results:
+                    meta = chunk_item.get("metadata", {})
+                    bm25_candidates.append({
+                        "chunk_id": chunk_item.get("chunk_id", f"bm25_{len(bm25_candidates)}"),
+                        "text": chunk_item.get("text", ""),
+                        "title": meta.get("file_name", "وثيقة"),
+                        "section_title": f"جزء {meta.get('chunk_index', 1)}",
+                        "bm25_score": score,
+                        "parent_id": chunk_item.get("parent_id", ""),
+                        "parent_text": chunk_item.get("parent_text", chunk_item.get("text", "")),
+                        "metadata": meta
+                    })
+            except Exception as e:
+                print(f"[Retriever Warning] BM25 search failed: {e}")
+            return bm25_candidates
+
+        # Run dense (GPU-bound) and BM25 (CPU-bound) in parallel
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            dense_future = pool.submit(_dense_search)
+            sparse_future = pool.submit(_sparse_search)
+            dense_candidates = dense_future.result()
+            bm25_candidates = sparse_future.result()
 
         # 3. Reciprocal Rank Fusion (RRF)
         # RRF_score = 1 / (k + r_dense) + 1 / (k + r_bm25)
