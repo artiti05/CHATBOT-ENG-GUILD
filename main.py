@@ -76,7 +76,7 @@ def run_server(port: int = 8000):
     print(f"  - URL: http://localhost:{target_port}")
     print("=" * 65 + "\n")
 
-    from api.main import app
+    from src.api.main import app
     uvicorn.run(app, host="0.0.0.0", port=target_port)
 
 
@@ -95,9 +95,9 @@ def resolve_dir(dir_arg, config_default: Path) -> Path:
 def run_ingest_texts(args):
     """Ingests text files from data/texts/ directory into vector database."""
     from scripts.batch_ingest import reset_storage_db, index_texts_directory
-    from core.ingestion import IngestionPipeline
-    from db.registry import DocumentRegistry
-    from core.config import TEXTS_DIR
+    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.cache_db.document_registry import DocumentRegistry
+    from src.config import TEXTS_DIR
 
     texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
 
@@ -120,9 +120,9 @@ def run_ingest_texts(args):
 def run_ingest_pdfs(args):
     """Vision parses and ingests PDF files from data/pdfs/ directory into vector database."""
     from scripts.batch_ingest import reset_storage_db, parse_remaining_pdfs_gpu
-    from core.ingestion import IngestionPipeline
-    from db.registry import DocumentRegistry
-    from core.config import PDFS_DIR
+    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.cache_db.document_registry import DocumentRegistry
+    from src.config import PDFS_DIR
 
     pdfs_dir_path = resolve_dir(getattr(args, "pdfs_dir", None), PDFS_DIR)
 
@@ -145,9 +145,9 @@ def run_ingest_pdfs(args):
 def run_ingest_markdown(args):
     """Indexes pre-parsed Markdown files from data/output_dir/ & data/storage/pdf_parsed_results/ into vector database."""
     from scripts.batch_ingest import reset_storage_db, index_preparsed_markdown_files
-    from core.ingestion import IngestionPipeline
-    from db.registry import DocumentRegistry
-    from core.config import OUTPUT_DIR
+    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.cache_db.document_registry import DocumentRegistry
+    from src.config import OUTPUT_DIR
 
     out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
 
@@ -170,9 +170,9 @@ def run_ingest_markdown(args):
 def run_ingest_kb(args):
     """Ingests texts/ and pre-parsed Markdown files into vector database (skips pdfs/)."""
     from scripts.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files
-    from core.ingestion import IngestionPipeline
-    from db.registry import DocumentRegistry
-    from core.config import TEXTS_DIR, OUTPUT_DIR
+    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.cache_db.document_registry import DocumentRegistry
+    from src.config import TEXTS_DIR, OUTPUT_DIR
 
     texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
     out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
@@ -202,9 +202,9 @@ def run_ingest_kb(args):
 def run_ingest_all(args):
     """Runs complete ingestion (data/texts/ + data/output_dir/ + data/pdfs/)."""
     from scripts.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files, parse_remaining_pdfs_gpu
-    from core.ingestion import IngestionPipeline
-    from db.registry import DocumentRegistry
-    from core.config import TEXTS_DIR, PDFS_DIR, OUTPUT_DIR
+    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.cache_db.document_registry import DocumentRegistry
+    from src.config import TEXTS_DIR, PDFS_DIR, OUTPUT_DIR
 
     texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
     out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
@@ -233,59 +233,34 @@ def run_ingest_all(args):
 
 
 def run_terminal_chat(args=None):
-    """Runs interactive terminal CLI chat directly in the console."""
-    import json
-    from core.rag_engine import RAGChatbot
+    """Runs interactive terminal CLI chat directly in the console using RAGChatbotEngine."""
+    from src.rag_chatbot_engine import RAGChatbotEngine
     print("\n" + "=" * 65)
-    print(" 🤖 JORDAN ENGINEERS ASSOCIATION — TERMINAL RAG CHAT")
+    print(" 🤖 ENG-GUILD CHATBOT — INTERACTIVE TERMINAL ENGINE")
     print(" Type your question and press Enter. Type 'exit' or 'q' to quit.")
     print("=" * 65 + "\n")
 
-    bot = RAGChatbot()
-    history = []
+    engine = RAGChatbotEngine()
 
     while True:
         try:
-            user_input = input("\n👤 سؤالك (المستخدم) > ").strip()
+            user_input = input("\n👤 سؤالك (User) > ").strip()
             if not user_input:
                 continue
             if user_input.lower() in ["exit", "quit", "q", "خروج"]:
-                print("\n👋 شكراً لاستخدامك المساعد الذكي. إلى اللقاء!")
+                print("\n👋 Goodbye!")
                 break
 
-            print("\n🤖 [RAG Engine] يحلل المصادر ويولّد الإجابة...\n")
-
-            full_text = ""
-            sources = []
-            for chunk_str in bot.answer_question_stream(user_input, history=history):
-                if chunk_str.startswith("data: "):
-                    try:
-                        data = json.loads(chunk_str[6:].strip())
-                        if data.get("type") == "meta":
-                            sources = data.get("sources", [])
-                        elif data.get("type") == "token":
-                            token = data.get("token", "")
-                            full_text += token
-                            print(token, end="", flush=True)
-                        elif data.get("type") == "done":
-                            if data.get("answer"):
-                                full_text = data.get("answer")
-                                print(full_text, end="", flush=True)
-                    except Exception:
-                        pass
-
-            print("\n")
-            if sources:
-                print("📚 المصادر المعتمدة:")
-                for src in sources:
-                    print(f"  • [المصدر {src.get('rank', 1)}] {src.get('title', 'وثيقة')} ({src.get('similarity_score', 0)}% تطابق)")
-
-            history.append({"role": "user", "content": user_input})
-            history.append({"role": "assistant", "content": full_text})
+            res = engine.process_query(user_input)
+            print("\n🤖 [Answer]:\n" + res["answer"])
+            print("\n📊 [Performance & 13-Stage Latency Breakdown]:")
+            print(res["text_breakdown"])
 
         except (KeyboardInterrupt, EOFError):
-            print("\n\n👋 خروج.")
+            print("\n\n👋 Interrupted. Goodbye!")
             break
+        except Exception as e:
+            print(f"\n❌ Error processing query: {e}")
 
 
 def run_inspect_chunks(args):

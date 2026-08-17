@@ -26,11 +26,11 @@ if sys.platform == "win32":
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from core.config import (
+from src.config import (
     STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH, TEXTS_DIR, PDFS_DIR, OUTPUT_DIR, PARSED_OUTPUT_DIR
 )
-from core.ingestion import IngestionPipeline, clean_document_text
-from db.registry import DocumentRegistry
+from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline, clean_document_text
+from src.cache_db.document_registry import DocumentRegistry
 
 
 def reset_storage_db():
