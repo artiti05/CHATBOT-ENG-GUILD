@@ -40,7 +40,7 @@ from src.config import (
     TABLE_UPSCALE_FACTOR, TABLE_CROP_PADDING, REQUEST_TIMEOUT, NUM_CTX, NUM_PREDICT,
     FILES_DIR, TEXTS_DIR, PDFS_DIR, IGNORE_TEXTS_DIR, EXCLUDE_DIRS, UNIFIED_VISION_PROMPT
 )
-from .bm25_search import BM25Indexer
+from src.pipeline.stage_02_retrieve.bm25_search import BM25Indexer
 
 
 def fix_reversed_arabic_text(text: str) -> str:

@@ -88,3 +88,27 @@ class PipelineProfiler:
             val = int(self.stage_latencies.get(key, 0.0))
             lines.append(f"{label:<20} {val:>3} ms")
         return "\n".join(lines)
+
+    def write_request_log(self, user_query: str, answer: str, cache_hit: bool = False, route: str = "GENERATION"):
+        """Appends structured JSON log entry for every chat request to data/logs/chat_requests.log."""
+        try:
+            import json
+            from src.config import LOGS_DIR
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            log_file = LOGS_DIR / "chat_requests.log"
+
+            log_entry = {
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "request_id": self.request_id,
+                "query": user_query,
+                "answer_snippet": answer[:200] if answer else "",
+                "cache_hit": cache_hit,
+                "route": route,
+                "total_latency_ms": self.get_total_latency(),
+                "breakdown": self.stage_latencies
+            }
+
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            print(f"Warning: Failed to write request log: {e}")

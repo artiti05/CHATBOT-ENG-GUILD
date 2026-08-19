@@ -71,8 +71,10 @@ CHATBOT-ENG-GUILD/
 │   │   ├── stage_03_verify_rerank/ # BGE Cross-Encoder Reranking & Verification
 │   │   └── stage_04_answer/    # Answer Synthesis, Dialect Rewriter & Generator Agents
 │   ├── services/               # Domain Services
-│   │   └── ticketing_service.py# Ticketing integration service
-│   └── rag_chatbot_engine.py   # Engine Entrypoint
+│   ├── kb_ingestor/            # Knowledge Base Ingestion & Chunking Inspection
+│   │   ├── batch_ingest.py     # Batch Ingestion Manager
+│   │   └── inspect_chunking.py # Chunking Inspection Diagnostic Tool
+│   └── rag_chatbot_engine.py   # RAG Engine Implementation
 │
 ├── data/                       # Knowledge Base & Persistent Storage
 │   ├── texts/                  # Raw text/markdown KB files (.md, .txt)
@@ -81,9 +83,6 @@ CHATBOT-ENG-GUILD/
 │   ├── output_dir/             # PDF Vision Parser debug artifacts & images
 │   └── storage/                # ChromaDB vector store, BM25 index & SQLite registry.db
 │
-├── scripts/                    # Ingestion & Benchmark Utilities
-│   ├── batch_ingest.py         # Batch Ingestion Manager
-│   └── test_pipeline.py        # Multi-Agent Pipeline Test Suite
 └── tests/                      # Pytest Unit & Integration Test Suites
 ```
 
@@ -334,13 +333,44 @@ except requests.exceptions.RequestException as e:
 
 ---
 
+## 🧪 Testing & Verification
+
+The repository features a comprehensive **40+ test automated Pytest suite** covering unit components, integration flows, and 13-stage latency profiling.
+
+### 1. Running Test Suites
+
+```powershell
+# Run all unit and integration tests
+pytest -m "unit or integration"
+
+# Run unit tests only (Stage 1-4 modular component tests)
+pytest tests/unit
+
+# Run integration tests only (API endpoints & end-to-end RAG engine)
+pytest tests/integration
+
+# Run 13-stage latency profiling & bottleneck diagnostic benchmarks
+pytest tests/profiling
+```
+
+### 2. Test Architecture Breakdown
+
+| Test Suite | Location | Covered Components | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Unit Tests** | `tests/unit/` | `QueryPreprocessor`, `RRFFusion`, `PriorityReranker`, `BM25Retriever`, `DeterministicConfidenceEvaluator`, `SemanticCache`, `DocumentRegistry`, `ResponseGeneratorAgent` | Fast, isolated verification of algorithms, normalization, and scoring math without network dependencies. |
+| **Integration Tests** | `tests/integration/` | `FastAPI` routes (`/api/chat`, `/health`, `/api/admin/reindex`), `RAGChatbot` pipeline | Verifies API HTTP contracts, status codes, and end-to-end multi-representation RAG output. |
+| **Profiling Benchmarks** | `tests/profiling/` | `PipelineProfiler`, `DiagnosticAnalyzer` | Benchmarks millisecond latency breakdowns across all 13 pipeline stages and tests automated bottleneck detection. |
+| **Test Fixtures** | `tests/conftest.py` | Shared Pytest fixtures (`sample_queries`, `sample_documents`, `mock_chroma_db`) | Supplies standardized Arabic MSA/dialect and English test data across all test modules. |
+
+---
+
 ## ⚙️ Configuration Reference
 
 | Parameter | Default Value | Purpose |
 | :--- | :--- | :--- |
 | `QWEN_EMBEDDING_MODEL_NAME` | `Alibaba-NLP/gte-Qwen2-1.5B-instruct` | Dense vector embedding model |
 | `BGE_RERANKER_MODEL_NAME` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranking model |
-| `OLLAMA_CHAT_MODEL` | `qwen2.5:7b` | Primary Ollama LLM for conversational responses |
+| `OLLAMA_CHAT_MODEL` | `ministral-3:8b` | Primary Ollama LLM for conversational responses |
 | `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Ollama VLM for Arabic PDF visual table parsing |
 
 ---

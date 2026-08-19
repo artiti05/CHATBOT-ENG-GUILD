@@ -1,7 +1,6 @@
 import pytest
 from src.pipeline.stage_03_verify_rerank.confidence import DeterministicConfidenceEvaluator
 from src.pipeline.stage_04_answer.answer_router import AnswerRouter
-from src.pipeline.stage_04_answer.templates import StructuredAnswerTemplates
 
 @pytest.mark.unit
 class TestDeterministicConfidenceEvaluator:
@@ -16,7 +15,7 @@ class TestDeterministicConfidenceEvaluator:
         candidates = [
             {"final_score": 85.0, "priority_boost": 0.5}
         ]
-        query_obj = {"intent": ["MEMBERSHIP"], "entities": {"JEA": "نقابة المهندسين"}}
+        query_obj = {"intent": ["MEMBERSHIP"]}
         res = DeterministicConfidenceEvaluator.evaluate(candidates, query_obj)
         assert res["decision"] in ("HIGH", "MEDIUM")
         assert res["score"] > 0.70
@@ -33,12 +32,3 @@ class TestAnswerRouter:
         res = self.router.route(query_obj, conf_res)
         assert res["route"] == "GENERATION"
         assert res["llm_required"] is True
-
-
-@pytest.mark.unit
-class TestStructuredAnswerTemplates:
-    def test_get_template_answer(self):
-        tmpl = StructuredAnswerTemplates.get_template_answer("MEMBERSHIP")
-        if tmpl:
-            assert isinstance(tmpl, str)
-            assert len(tmpl) > 0

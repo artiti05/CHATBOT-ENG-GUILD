@@ -94,8 +94,8 @@ def resolve_dir(dir_arg, config_default: Path) -> Path:
 
 def run_ingest_texts(args):
     """Ingests text files from data/texts/ directory into vector database."""
-    from scripts.batch_ingest import reset_storage_db, index_texts_directory
-    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.kb_ingestor.batch_ingest import reset_storage_db, index_texts_directory
+    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
     from src.config import TEXTS_DIR
 
@@ -119,8 +119,8 @@ def run_ingest_texts(args):
 
 def run_ingest_pdfs(args):
     """Vision parses and ingests PDF files from data/pdfs/ directory into vector database."""
-    from scripts.batch_ingest import reset_storage_db, parse_remaining_pdfs_gpu
-    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.kb_ingestor.batch_ingest import reset_storage_db, parse_remaining_pdfs_gpu
+    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
     from src.config import PDFS_DIR
 
@@ -144,8 +144,8 @@ def run_ingest_pdfs(args):
 
 def run_ingest_markdown(args):
     """Indexes pre-parsed Markdown files from data/output_dir/ & data/storage/pdf_parsed_results/ into vector database."""
-    from scripts.batch_ingest import reset_storage_db, index_preparsed_markdown_files
-    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.kb_ingestor.batch_ingest import reset_storage_db, index_preparsed_markdown_files
+    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
     from src.config import OUTPUT_DIR
 
@@ -169,8 +169,8 @@ def run_ingest_markdown(args):
 
 def run_ingest_kb(args):
     """Ingests texts/ and pre-parsed Markdown files into vector database (skips pdfs/)."""
-    from scripts.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files
-    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.kb_ingestor.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files
+    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
     from src.config import TEXTS_DIR, OUTPUT_DIR
 
@@ -201,8 +201,8 @@ def run_ingest_kb(args):
 
 def run_ingest_all(args):
     """Runs complete ingestion (data/texts/ + data/output_dir/ + data/pdfs/)."""
-    from scripts.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files, parse_remaining_pdfs_gpu
-    from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+    from src.kb_ingestor.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files, parse_remaining_pdfs_gpu
+    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
     from src.config import TEXTS_DIR, PDFS_DIR, OUTPUT_DIR
 
@@ -265,7 +265,7 @@ def run_terminal_chat(args=None):
 
 def run_inspect_chunks(args):
     """Runs Parent-Child Chunking Inspector and saves report to data/chunking_logs/."""
-    from scripts.inspect_chunking import inspect_file_chunking, interactive_menu
+    from src.kb_ingestor.inspect_chunking import inspect_file_chunking, interactive_menu
     file_arg = getattr(args, "file", None)
     if file_arg:
         inspect_file_chunking(Path(file_arg))

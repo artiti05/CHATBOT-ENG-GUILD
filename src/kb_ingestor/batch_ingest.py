@@ -3,10 +3,10 @@ Arabic PDF Parser & Knowledge Base Batch Ingestion Tool
 ========================================================
 
 Usage:
-  python batch_ingest.py --index-only        # Resets DB & indexes 6 pre-parsed Markdown files into storage NOW
-  python batch_ingest.py --parse-only        # GPU machine: parses remaining 51 PDFs into storage
-  python batch_ingest.py                     # Runs full pipeline (reset -> index pre-parsed -> GPU parse remaining)
-  python batch_ingest.py --dry-run           # Previews files to process without modifying DB or VLM
+  python -m src.kb_ingestor.batch_ingest --index-only  # Resets DB & indexes pre-parsed Markdown files into storage NOW
+  python -m src.kb_ingestor.batch_ingest --parse-only  # GPU machine: parses remaining PDFs into storage
+  python -m src.kb_ingestor.batch_ingest               # Runs full pipeline (reset -> index pre-parsed -> GPU parse remaining)
+  python -m src.kb_ingestor.batch_ingest --dry-run     # Previews files to process without modifying DB or VLM
 """
 
 import os
@@ -19,17 +19,20 @@ from pathlib import Path
 
 # Force UTF-8 stdout encoding for Windows PowerShell/CMD
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # Add project root to path
-BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BASE_DIR))
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from src.config import (
-    STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH, TEXTS_DIR, PDFS_DIR, OUTPUT_DIR, PARSED_OUTPUT_DIR
+    STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH, TEXTS_DIR, PDFS_DIR, OUTPUT_DIR, PARSED_OUTPUT_DIR, MARKDOWNS_DIR
 )
-from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline, clean_document_text
+from .ingestion import IngestionPipeline, clean_document_text
 from src.cache_db.document_registry import DocumentRegistry
 
 
@@ -129,7 +132,7 @@ def index_preparsed_markdown_files(output_dir: Path, pipeline: IngestionPipeline
     print(f"[Phase 2/3] Scanning & Indexing pre-parsed Markdown files in '{output_dir.name}' & '{PARSED_OUTPUT_DIR.name}' ...")
     print("=" * 65)
 
-    search_dirs = [output_dir, PARSED_OUTPUT_DIR]
+    search_dirs = [output_dir, PARSED_OUTPUT_DIR, MARKDOWNS_DIR]
     parsed_files = []
     seen_paths = set()
 
@@ -148,7 +151,6 @@ def index_preparsed_markdown_files(output_dir: Path, pipeline: IngestionPipeline
         return set()
 
     print(f"  ✔ Found {len(parsed_files)} pre-parsed Markdown files.")
-
 
     indexed_stems = set()
     total_indexed_chunks = 0
@@ -260,16 +262,12 @@ def main():
     out_dir_path = Path(args.output_dir).resolve()
     pdfs_dir_path = Path(args.pdfs_dir).resolve()
 
-
-
-    # Reset storage unless flag explicitly disables it or dry-run is active
     if not args.no_reset_db and not args.dry_run and not args.parse_only:
         reset_storage_db()
 
     pipeline = IngestionPipeline()
     registry = DocumentRegistry()
 
-    # 1. Index texts/ directory into vector database
     index_texts_directory(texts_dir_path, pipeline, registry, dry_run=args.dry_run)
 
     indexed_stems = set()

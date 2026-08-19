@@ -4,7 +4,6 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 
 from src.config import CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME
-from .ingestion import BGEM3Embedder
 from .bm25_search import BM25Indexer
 
 class RetrieverAgent:
@@ -15,6 +14,7 @@ class RetrieverAgent:
     3. Reciprocal Rank Fusion (RRF k=60) score merging.
     """
     def __init__(self):
+        from src.kb_ingestor.ingestion import BGEM3Embedder
         self.client = chromadb.PersistentClient(
             path=str(CHROMA_PERSIST_DIR),
             settings=ChromaSettings(anonymized_telemetry=False)

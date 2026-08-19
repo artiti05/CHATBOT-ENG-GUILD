@@ -16,11 +16,12 @@ CHUNKING_LOGS_DIR = BASE_DIR / "data" / "chunking_logs"
 CRAWLER_CACHE_DIR = BASE_DIR / "data" / "crawler"
 CRAWL_CACHE_DIR = CRAWLER_CACHE_DIR  # Alias for backward compatibility
 NEW_UPLOADS_DIR = BASE_DIR / "data" / "new_uploads"
+LOGS_DIR = BASE_DIR / "data" / "logs"
 FILES_DIR = BASE_DIR / "files"
 
 
 # Ensure essential data directories exist
-for p in (TEXTS_DIR, MARKDOWNS_DIR, PDFS_DIR, OUTPUT_DIR, CHUNKING_LOGS_DIR, CRAWLER_CACHE_DIR):
+for p in (TEXTS_DIR, MARKDOWNS_DIR, PDFS_DIR, OUTPUT_DIR, CHUNKING_LOGS_DIR, CRAWLER_CACHE_DIR, LOGS_DIR):
     p.mkdir(parents=True, exist_ok=True)
 
 # Ingestion Exclusion Flags
@@ -38,12 +39,6 @@ CACHE_PERSIST_PATH = STORAGE_DIR / "semantic_cache.json"
 CACHE_SIMILARITY_THRESHOLD = 0.88
 CACHE_MAX_ENTRIES = 1000
 
-# Ticketing System API Settings
-TICKETING_API_URL = os.getenv("TICKETING_API_URL", "https://api.guild.org/v1/tickets")
-TICKETING_API_KEY = os.getenv("TICKETING_API_KEY", "")
-TICKETING_ENABLED = os.getenv("TICKETING_ENABLED", "true").lower() in ("1", "true", "yes")
-TICKETING_TIMEOUT_SEC = int(os.getenv("TICKETING_TIMEOUT_SEC", "10"))
-
 # Ensure storage directories exist
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,16 +46,18 @@ CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 # Vector DB settings
 CHROMA_COLLECTION_NAME = "guild_knowledge_base"
 
-# Embedding Model Settings
+# Embedding & Neural Rewriter Model Settings
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "qwen")  # "qwen" or "bge-m3"
 QWEN_EMBEDDING_MODEL_NAME = os.getenv("QWEN_EMBEDDING_MODEL_NAME", "Alibaba-NLP/gte-Qwen2-1.5B-instruct")
 BGE_M3_MODEL_NAME = "BAAI/bge-m3"
 BGE_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+ENABLE_ARAT5_REWRITER = os.getenv("ENABLE_ARAT5_REWRITER", "true").lower() in ("1", "true", "yes")
+ARAT5_MODEL_NAME = os.getenv("ARAT5_MODEL_NAME", "UBC-NLP/AraT5-base")
 USE_FP16 = True
 
 # Reranker score threshold — chunks below raw logit 0.0 (sigmoid 50%) are strictly discarded
 RERANK_THRESHOLD    = 0.0   # raw logit floor (50% match) — anything below is dropped BEFORE boost
-RELEVANCE_THRESHOLD = 50    # Minimum similarity percentage (50%) to include chunk in LLM context
+RELEVANCE_THRESHOLD = 40    # Minimum similarity percentage (40%) to include chunk in LLM context
 RERANK_SCORE_FLOOR  = 50    # minimum % shown (for chunks that pass threshold)
 RERANK_SCORE_CEIL   = 97    # maximum % shown (no chunk ever claims 100%)
 

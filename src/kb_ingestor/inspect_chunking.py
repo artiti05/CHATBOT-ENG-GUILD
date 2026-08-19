@@ -12,11 +12,12 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 # Ensure project root is in sys.path
-BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BASE_DIR))
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
-from core.ingestion import TextChunker, clean_document_text
-from core.config import (
+from .ingestion import TextChunker, clean_document_text
+from src.config import (
     MARKDOWNS_DIR, TEXTS_DIR, OUTPUT_DIR, CHUNKING_LOGS_DIR,
     PARENT_CHUNK_TOKENS, CHILD_CHUNK_TOKENS
 )

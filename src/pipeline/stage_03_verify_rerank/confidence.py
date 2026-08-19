@@ -15,13 +15,10 @@ class DeterministicConfidenceEvaluator:
 
         top_score = candidates[0].get("final_score", 0.0)
         has_intent = len(query_obj.get("intent", [])) > 0
-        has_terminology = len(query_obj.get("entities", {})) > 0
         has_priority_boost = candidates[0].get("priority_boost", 0.0) > 0.0
 
         confidence = top_score
         if has_intent:
-            confidence += 5.0
-        if has_terminology:
             confidence += 5.0
         if has_priority_boost:
             confidence += 5.0
@@ -40,6 +37,5 @@ class DeterministicConfidenceEvaluator:
             "decision": decision,
             "top_score": top_score,
             "has_intent": has_intent,
-            "has_terminology": has_terminology,
             "llm_verifier_used": False
         }

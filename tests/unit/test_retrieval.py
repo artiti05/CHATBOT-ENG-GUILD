@@ -1,7 +1,6 @@
 import pytest
 from src.pipeline.stage_02_retrieve.rrf_fusion import RRFFusion
 from src.pipeline.stage_03_verify_rerank.reranker import PriorityReranker
-from src.pipeline.stage_02_retrieve.fuzzy_retriever import RapidFuzzRetriever
 from src.pipeline.stage_02_retrieve.bm25_retriever import BM25Retriever
 
 @pytest.mark.unit
@@ -48,16 +47,6 @@ class TestPriorityReranker:
         ]
         boosted = self.reranker.apply_priority_boost(candidates)
         assert boosted[0]["id"] == "c2"
-
-
-@pytest.mark.unit
-class TestRapidFuzzRetriever:
-    def setup_method(self):
-        self.fuzzy = RapidFuzzRetriever()
-
-    def test_search_fuzzy_returns_list(self, sample_documents):
-        results = self.fuzzy.search("تسجيل المهندسين", sample_documents, top_k=5)
-        assert isinstance(results, list)
 
 
 @pytest.mark.unit

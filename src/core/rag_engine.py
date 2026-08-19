@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Tuple, Generator, Optional
 from pathlib import Path
 
 from src.rag_chatbot_engine import RAGChatbotEngine
-from src.pipeline.stage_04_answer.templates import StructuredAnswerTemplates
 
 
 def clean_formatting(text: str) -> str:
@@ -33,7 +32,6 @@ class RAGChatbot:
             ans = ans[0] if ans else ""
         return {
             "answer": ans,
-            "ticket": res.get("ticket"),
             "sources": res["sources"][:top_k],
             "cache_hit": res.get("cache_hit", False),
             "metadata": res.get("profiling", {})
@@ -66,7 +64,7 @@ class RAGChatbot:
             return
 
         query_obj = self.engine.nlp_pipeline.process(query)
-        fused_cands = self.engine.retriever.retrieve_hybrid(query, top_k=15)
+        fused_cands = self.engine.retriever.retrieve_hybrid(query_obj["normalized_text"], top_k=15)
         reranked_cands = self.engine.reranker.apply_priority_boost(fused_cands)
         conf_res = self.engine.confidence_eval.evaluate(reranked_cands, query_obj)
         route_res = self.engine.router.route(query_obj, conf_res)

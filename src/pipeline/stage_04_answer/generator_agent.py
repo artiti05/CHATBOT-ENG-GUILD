@@ -106,13 +106,12 @@ class ResponseGeneratorAgent:
 
         for src in sources:
             score = src.get("similarity_score", 0)
-            if score < RELEVANCE_THRESHOLD:
-                continue
-
-            rank = src.get("rank", len(included_sources) + 1)
+            rank = len(included_sources) + 1
             title = src.get("title", "وثيقة")
             section = src.get("section_title", "")
             raw_text = src.get("text", "").strip()
+            if not raw_text:
+                continue
 
             header = f"[المصدر {rank}] {title}"
             if section:
@@ -170,7 +169,7 @@ class ResponseGeneratorAgent:
                 f"4. {lang_instruction}\n"
                 f"5. التوثيق: اذكر رقم المصدر [المصدر N] بجانب كل معلومة واستشهاد.\n"
                 f"6. خلو من المظاهر الزائفة: يُحظر إضافة أي خاتمة روتينية أو جمل ترحيبية أو عرض مساعدة إضافية في النهاية (مثل 'تختص النقابة...' أو 'في حال وجود استفسارات').\n"
-                f"7. عدم التكهن: لا تخترع أي معلومة. إذا كانت المعلومة غير موجودة، قل: 'لم أتمكن من العثور على هذه المعلومة في موارد النقابة.'\n"
+                f"7. الدقة والاعتماد على المصادر: اجب اعتماداً على المعلومات الواردة في المصادر المرفقة بأعلاه، والخص كافة التفاصيل والخطوات والشروط المذكورة بدقة.\n"
             )
 
             full_prompt = (
@@ -178,7 +177,7 @@ class ResponseGeneratorAgent:
                 f"{'=' * 60}\n"
                 f"المصادر من قاعدة المعرفة:\n{context_str}\n"
                 f"{'=' * 60}\n"
-                f"سؤال المستخدم: {query if detected_accent in ('jordanian', 'ar-JO') else standalone_query}\n"
+                f"سؤال المستخدم: {query}\n"
                 f"{'=' * 60}\n"
                 f"الإجابة المباشرة:"
             )

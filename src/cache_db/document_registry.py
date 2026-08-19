@@ -4,7 +4,6 @@ import hashlib
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from src.config import REGISTRY_DB_PATH, STORAGE_DIR, CRAWL_CACHE_DIR
-from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
 
 class DocumentRegistry:
     def __init__(self, db_path: Path = REGISTRY_DB_PATH):

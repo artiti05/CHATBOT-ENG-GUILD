@@ -27,6 +27,8 @@ class SemanticCache:
         return None
 
     def put(self, query: str, answer: str, sources: List[Dict[str, Any]]):
+        if not answer or "لم أتمكن من العثور على معلومات دقيقة" in answer or "I couldn't find that information" in answer:
+            return  # Do not cache fallback failure responses
         q_norm = query.strip().lower()
         entry = {
             "query_normalized": q_norm,

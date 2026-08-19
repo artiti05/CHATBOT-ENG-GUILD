@@ -5,7 +5,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, BackgroundTasks
 from pydantic import BaseModel
 from src.api.dependencies import verify_admin_key
-from src.pipeline.stage_02_retrieve.ingestion import IngestionPipeline
+from src.kb_ingestor.ingestion import IngestionPipeline
 from src.cache_db.document_registry import DocumentRegistry
 from src.config import PDFS_DIR, TEXTS_DIR, PARSED_OUTPUT_DIR, NEW_UPLOADS_DIR
 
