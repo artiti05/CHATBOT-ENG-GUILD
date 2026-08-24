@@ -1,9 +1,10 @@
-import os
-import sqlite3
 import hashlib
+import sqlite3
 from pathlib import Path
-from typing import Dict, Any, List, Optional
-from src.config import REGISTRY_DB_PATH, STORAGE_DIR, CRAWL_CACHE_DIR
+from typing import Any, Dict, List, Optional
+
+from src.config import CRAWL_CACHE_DIR, REGISTRY_DB_PATH
+
 
 class DocumentRegistry:
     def __init__(self, db_path: Path = REGISTRY_DB_PATH):

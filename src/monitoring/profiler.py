@@ -1,5 +1,6 @@
 import time
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, Optional
+
 
 class StageTimer:
     """Context manager for timing pipeline stage execution."""
@@ -25,18 +26,14 @@ class PipelineProfiler:
         self.start_time = time.perf_counter()
         self.stage_latencies: Dict[str, float] = {
             "cache": 0.0,
-            "language_detection": 0.0,
             "normalization": 0.0,
-            "msa_conversion": 0.0,
-            "intent": 0.0,
-            "bm25": 0.0,
-            "bge_m3": 0.0,
-            "rapidfuzz": 0.0,
-            "rrf": 0.0,
-            "reranker": 0.0,
-            "priority": 0.0,
-            "crag": 0.0,
-            "answer": 0.0
+            "dialect_rewrite": 0.0,
+            "dense_search": 0.0,
+            "sparse_search": 0.0,
+            "fusion": 0.0,
+            "priority_boost": 0.0,
+            "rerank": 0.0,
+            "generation": 0.0
         }
         self.stage_metadata: Dict[str, Any] = {}
 
@@ -64,38 +61,45 @@ class PipelineProfiler:
         total = self.get_total_latency()
         lines = [
             f"REQUEST {self.request_id}",
-            f"TOTAL REQUEST",
+            "TOTAL REQUEST",
             f"Total latency: {int(total)} ms",
             "",
             "Breakdown:"
         ]
         labels = {
-            "cache": "Cache",
-            "language_detection": "Language detection",
-            "normalization": "Normalization",
-            "msa_conversion": "MSA conversion",
-            "intent": "Intent",
-            "bm25": "BM25",
-            "bge_m3": "BGE-M3",
-            "rapidfuzz": "RapidFuzz",
-            "rrf": "RRF",
-            "reranker": "Reranker",
-            "priority": "Priority",
-            "crag": "CRAG",
-            "answer": "Answer"
+            "cache": "Cache Lookup",
+            "normalization": "Query Normalization",
+            "dialect_rewrite": "AraT5 MSA Rewrite",
+            "dense_search": "Chroma Dense Search",
+            "sparse_search": "BM25 Sparse Search",
+            "fusion": "RRF Fusion",
+            "priority_boost": "Doc Priority Boost",
+            "rerank": "Cross-Encoder Rerank",
+            "generation": "LLM Generation"
         }
         for key, label in labels.items():
             val = int(self.stage_latencies.get(key, 0.0))
-            lines.append(f"{label:<20} {val:>3} ms")
+            lines.append(f"{label:<25} {val:>3} ms")
         return "\n".join(lines)
 
+
     def write_request_log(self, user_query: str, answer: str, cache_hit: bool = False, route: str = "GENERATION"):
-        """Appends structured JSON log entry for every chat request to data/logs/chat_requests.log."""
+        """Appends structured JSON log entry using a 10MB RotatingFileHandler to prevent disk growth."""
         try:
             import json
+            import logging
+            from logging.handlers import RotatingFileHandler
             from src.config import LOGS_DIR
+
             LOGS_DIR.mkdir(parents=True, exist_ok=True)
             log_file = LOGS_DIR / "chat_requests.log"
+
+            logger = logging.getLogger("chat_requests")
+            if not logger.handlers:
+                handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                logger.addHandler(handler)
+                logger.setLevel(logging.INFO)
 
             log_entry = {
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -108,7 +112,6 @@ class PipelineProfiler:
                 "breakdown": self.stage_latencies
             }
 
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            logger.info(json.dumps(log_entry, ensure_ascii=False))
         except Exception as e:
             print(f"Warning: Failed to write request log: {e}")

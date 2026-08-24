@@ -1,4 +1,4 @@
 # Monitoring, Profiling & Latency Diagnostics
+from .diagnostic_report import DiagnosticAnalyzer
 from .profiler import PipelineProfiler, StageTimer
 from .tracing import RequestTracer
-from .diagnostic_report import DiagnosticAnalyzer

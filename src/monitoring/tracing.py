@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import Dict, Any, Optional
+
 
 class RequestTracer:
     """Tracks unique request context and request IDs across all pipeline stages."""

@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
+
+from src.api.dependencies import ADMIN_API_KEY, USER_API_KEY
 from src.api.main import app
-from src.api.dependencies import USER_API_KEY, ADMIN_API_KEY
+
 
 @pytest.mark.integration
 class TestAPIEndpoints:

@@ -1,4 +1,5 @@
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 
 class DiagnosticAnalyzer:
     """Categorizes pipeline bottlenecks and operational flags automatically."""

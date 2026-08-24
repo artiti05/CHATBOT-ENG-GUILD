@@ -23,10 +23,9 @@ Execution Modes:
    python main.py ingest-all                   # Full end-to-end ingestion
 """
 
-import sys
-import os
-import socket
 import argparse
+import socket
+import sys
 from pathlib import Path
 
 # Force UTF-8 encoding on Windows console
@@ -50,7 +49,8 @@ def kill_port_owner(port: int = 8000):
     if is_port_in_use(port):
         print(f"[INFO] Freeing port {port} from stale listener process...")
         try:
-            import subprocess, time
+            import subprocess
+            import time
             if sys.platform == "win32":
                 out = subprocess.check_output(f"netstat -ano | findstr :{port}", shell=True).decode()
                 for line in out.strip().splitlines():
@@ -66,15 +66,16 @@ def kill_port_owner(port: int = 8000):
 def run_server(port: int = 8000):
     """Launches the FastAPI Web Server and Arabic/Jordanian AI Chatbot UI on Port 8000."""
     import uvicorn
-
+    IP_ADDRESS = '192.168.1.22'
     target_port = port
     if is_port_in_use(target_port):
         kill_port_owner(target_port)
 
     print("\n" + "=" * 65)
     print(" 🚀 GUILD KNOWLEDGE BASE RAG WEB SERVER")
-    print(f"  - URL: http://localhost:{target_port}")
+    print(f"  - URL: http://{IP_ADDRESS}:{target_port}")
     print("=" * 65 + "\n")
+
 
     from src.api.main import app
     uvicorn.run(app, host="0.0.0.0", port=target_port)
@@ -94,10 +95,10 @@ def resolve_dir(dir_arg, config_default: Path) -> Path:
 
 def run_ingest_texts(args):
     """Ingests text files from data/texts/ directory into vector database."""
-    from src.kb_ingestor.batch_ingest import reset_storage_db, index_texts_directory
-    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
     from src.config import TEXTS_DIR
+    from src.kb_ingestor.batch_ingest import index_texts_directory, reset_storage_db
+    from src.kb_ingestor.ingestion import IngestionPipeline
 
     texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
 
@@ -119,10 +120,10 @@ def run_ingest_texts(args):
 
 def run_ingest_pdfs(args):
     """Vision parses and ingests PDF files from data/pdfs/ directory into vector database."""
-    from src.kb_ingestor.batch_ingest import reset_storage_db, parse_remaining_pdfs_gpu
-    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
     from src.config import PDFS_DIR
+    from src.kb_ingestor.batch_ingest import parse_remaining_pdfs_gpu, reset_storage_db
+    from src.kb_ingestor.ingestion import IngestionPipeline
 
     pdfs_dir_path = resolve_dir(getattr(args, "pdfs_dir", None), PDFS_DIR)
 
@@ -144,10 +145,10 @@ def run_ingest_pdfs(args):
 
 def run_ingest_markdown(args):
     """Indexes pre-parsed Markdown files from data/output_dir/ & data/storage/pdf_parsed_results/ into vector database."""
-    from src.kb_ingestor.batch_ingest import reset_storage_db, index_preparsed_markdown_files
-    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
     from src.config import OUTPUT_DIR
+    from src.kb_ingestor.batch_ingest import index_preparsed_markdown_files, reset_storage_db
+    from src.kb_ingestor.ingestion import IngestionPipeline
 
     out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
 
@@ -169,10 +170,10 @@ def run_ingest_markdown(args):
 
 def run_ingest_kb(args):
     """Ingests texts/ and pre-parsed Markdown files into vector database (skips pdfs/)."""
-    from src.kb_ingestor.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files
-    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
-    from src.config import TEXTS_DIR, OUTPUT_DIR
+    from src.config import OUTPUT_DIR, TEXTS_DIR
+    from src.kb_ingestor.batch_ingest import index_preparsed_markdown_files, index_texts_directory, reset_storage_db
+    from src.kb_ingestor.ingestion import IngestionPipeline
 
     texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
     out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
@@ -201,10 +202,15 @@ def run_ingest_kb(args):
 
 def run_ingest_all(args):
     """Runs complete ingestion (data/texts/ + data/output_dir/ + data/pdfs/)."""
-    from src.kb_ingestor.batch_ingest import reset_storage_db, index_texts_directory, index_preparsed_markdown_files, parse_remaining_pdfs_gpu
-    from src.kb_ingestor.ingestion import IngestionPipeline
     from src.cache_db.document_registry import DocumentRegistry
-    from src.config import TEXTS_DIR, PDFS_DIR, OUTPUT_DIR
+    from src.config import OUTPUT_DIR, PDFS_DIR, TEXTS_DIR
+    from src.kb_ingestor.batch_ingest import (
+        index_preparsed_markdown_files,
+        index_texts_directory,
+        parse_remaining_pdfs_gpu,
+        reset_storage_db,
+    )
+    from src.kb_ingestor.ingestion import IngestionPipeline
 
     texts_dir_path = resolve_dir(getattr(args, "texts_dir", None), TEXTS_DIR)
     out_dir_path = resolve_dir(getattr(args, "output_dir", None), OUTPUT_DIR)
@@ -279,7 +285,7 @@ def main():
         description="Jordan Engineers Association — Arabic PDF Parser & RAG Chatbot CLI",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    
+
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
 
     # Interactive Terminal Chat

@@ -1,8 +1,6 @@
-import os
-import re
 import json
-from typing import List, Dict, Any, Tuple, Generator, Optional
-from pathlib import Path
+import re
+from typing import Any, Dict, Generator, List
 
 from src.rag_chatbot_engine import RAGChatbotEngine
 
@@ -64,7 +62,8 @@ class RAGChatbot:
             return
 
         query_obj = self.engine.nlp_pipeline.process(query)
-        fused_cands = self.engine.retriever.retrieve_hybrid(query_obj["normalized_text"], top_k=15)
+        search_query = query_obj.get("canonical_msa") or query_obj.get("normalized_text")
+        fused_cands = self.engine.retriever.retrieve_hybrid(search_query, top_k=15)
         reranked_cands = self.engine.reranker.apply_priority_boost(fused_cands)
         conf_res = self.engine.confidence_eval.evaluate(reranked_cands, query_obj)
         route_res = self.engine.router.route(query_obj, conf_res)
@@ -80,11 +79,10 @@ class RAGChatbot:
 
         full_answer = ""
         if route == "DETERMINISTIC":
-            primary_intent = query_obj["intent"][0] if query_obj["intent"] else "MEMBERSHIP"
-            tmpl_ans = StructuredAnswerTemplates.get_template_answer(primary_intent)
-            full_answer = tmpl_ans or "يرجى زيارة بوابة نقابة المهندسين للحصول على التفاصيل."
+            full_answer = "يرجى زيارة بوابة نقابة المهندسين (jea.org.jo) للحصول على التفاصيل والخدمات الرسمية."
             for char in full_answer:
                 yield f"data: {json.dumps({'type': 'token', 'token': char}, ensure_ascii=False)}\n\n"
+
         else:
             prompt_str, sources_used = self.engine.generator.build_prompt(
                 query=query,
@@ -117,7 +115,7 @@ class RAGChatbot:
 
 
 class KnowledgeRetriever:
-    """Knowledge retriever alias for API dependencies."""
+    """Knowledge retriever providing fast retrieval-only search without LLM generation overhead."""
     def __init__(self):
         self.engine = RAGChatbotEngine()
 
@@ -126,10 +124,17 @@ class KnowledgeRetriever:
         return self.engine.retriever.collection
 
     def search(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
-        res = self.engine.process_query(query)
-        return res.get("sources", [])[:top_k]
+        if not query or not query.strip():
+            return []
+        query_obj = self.engine.nlp_pipeline.process(query)
+        search_query = query_obj.get("canonical_msa") or query_obj.get("normalized_text")
+        fused_cands = self.engine.retriever.retrieve_hybrid(search_query, top_k=top_k * 2)
+        if hasattr(self.engine.reranker, "rerank"):
+            reranked_cands = self.engine.reranker.rerank(search_query, fused_cands)
+        else:
+            reranked_cands = self.engine.reranker.apply_priority_boost(fused_cands)
+        return reranked_cands[:top_k]
 
     def retrieve(self, query_text: str = "", query: str = "", top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
         q = query_text or query
-        res = self.engine.process_query(q)
-        return res.get("sources", [])[:top_k]
+        return self.search(q, top_k=top_k)

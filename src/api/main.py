@@ -1,6 +1,5 @@
-import sys
 import os
-from pathlib import Path
+import sys
 
 # Force UTF-8 encoding on Windows console stdout/stderr
 if sys.platform == "win32":
@@ -9,21 +8,41 @@ if sys.platform == "win32":
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from fastapi import FastAPI, HTTPException, Security
-from fastapi.security import APIKeyHeader
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
 
-from src.core.rag_engine import KnowledgeRetriever
 from src.cache_db.document_registry import DocumentRegistry
-from .routes_chat import router as chat_router
+from src.core.rag_engine import KnowledgeRetriever
+
 from .routes_admin import router as admin_router
 from .routes_admin_ui import router as admin_ui_router
-from .dependencies import USER_API_KEY, ADMIN_API_KEY
+from .routes_chat import router as chat_router
 
-app = FastAPI(title="Guild Knowledge Base RAG Chatbot UI", version="3.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # System Startup: Clear transient semantic cache so first query never hits old cache
+    try:
+        from src.cache_db.semantic_cache import SemanticCache
+        SemanticCache().clear()
+        print("[System Startup] Cleared semantic cache.")
+    except Exception as e:
+        print(f"[System Startup Warning] {e}")
+    yield
+    # System Shutdown: Wipe semantic cache when application stops/closes
+    try:
+        from src.cache_db.semantic_cache import SemanticCache
+        SemanticCache().clear()
+        print("[System Shutdown] Cleared semantic cache.")
+    except Exception as e:
+        print(f"[System Shutdown Warning] {e}")
+
+
+app = FastAPI(title="Guild Knowledge Base RAG Chatbot UI", version="3.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,12 +61,16 @@ def favicon():
 
 @app.get("/api/health")
 async def health():
+    return {"status": "ok", "version": "3.0.0"}
+
+@app.get("/api/ready")
+async def ready():
     try:
         retriever = KnowledgeRetriever()
         chunk_count = retriever.collection.count()
-        return {"status": "ok", "chunks": chunk_count}
+        return {"status": "ready", "chunks": chunk_count}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=f"Database not ready: {e}")
 
 @app.get("/api/stats")
 def get_stats():
@@ -59,8 +82,9 @@ def get_stats():
 
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
-    default_key = USER_API_KEY or ADMIN_API_KEY or ""
-    return HTML_CONTENT.replace("{{DEFAULT_USER_KEY}}", default_key)
+    return HTML_CONTENT.replace("{{DEFAULT_USER_KEY}}", "")
+
+
 
 HTML_CONTENT = r"""<!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -517,21 +541,44 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         const sendBtn = document.getElementById('send-btn');
         sendBtn.disabled = true;
 
+        let apiKey = localStorage.getItem('user_api_key') || DEFAULT_KEY;
+
         try {
-            const resp = await fetch('/api/chat/stream', {
+            let resp = await fetch('/api/chat/stream', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-API-Key': DEFAULT_KEY
+                    'X-API-Key': apiKey
                 },
                 body: JSON.stringify({ query: query })
             });
 
+            if (resp.status === 403) {
+                const userEnteredKey = prompt('يرجى إدخال مفتاح API المعتمد للوصول إلى الخدمة (X-API-Key):');
+                if (userEnteredKey) {
+                    localStorage.setItem('user_api_key', userEnteredKey.trim());
+                    apiKey = userEnteredKey.trim();
+                    resp = await fetch('/api/chat/stream', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-API-Key': apiKey
+                        },
+                        body: JSON.stringify({ query: query })
+                    });
+                }
+            }
+
             if (!resp.ok) {
-                bubble.innerText = 'حدث خطأ في الاتصال بالخادم.';
+                if (resp.status === 403) {
+                    bubble.innerText = '🔒 خطأ 403: غير مصرح لك بالوصول. يرجى إدخال مفتاح API صحيح.';
+                } else {
+                    bubble.innerText = 'حدث خطأ في الاتصال بالخادم.';
+                }
                 sendBtn.disabled = false;
                 return;
             }
+
 
             const reader = resp.body.getReader();
             const decoder = new TextDecoder('utf-8');

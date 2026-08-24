@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.ruff_cache/
 
 # C extensions
 *.so
@@ -12,15 +13,19 @@ venv/
 env/
 .venv/
 
-# Local Storage, Vector DB & Caches
+# Local Storage, Vector DB & Model Weights
 data/storage/
 data/output_dir/
 data/chunking_logs/
 data/crawler/
 data/new_uploads/
-storage/
+data/logs/
+models/
+araT5/models/
 *.log
 *.pkl
+*.db
+semantic_cache.json
 
 # IDE & OS generated files
 .vscode/

@@ -9,12 +9,11 @@ Usage:
   python -m src.kb_ingestor.batch_ingest --dry-run     # Previews files to process without modifying DB or VLM
 """
 
-import os
-import sys
-import io
 import argparse
-import shutil
 import hashlib
+import os
+import shutil
+import sys
 from pathlib import Path
 
 # Force UTF-8 stdout encoding for Windows PowerShell/CMD
@@ -29,11 +28,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from src.config import (
-    STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH, TEXTS_DIR, PDFS_DIR, OUTPUT_DIR, PARSED_OUTPUT_DIR, MARKDOWNS_DIR
-)
-from .ingestion import IngestionPipeline, clean_document_text
 from src.cache_db.document_registry import DocumentRegistry
+from src.config import (
+    CHROMA_PERSIST_DIR,
+    MARKDOWNS_DIR,
+    OUTPUT_DIR,
+    PARSED_OUTPUT_DIR,
+    PDFS_DIR,
+    REGISTRY_DB_PATH,
+    STORAGE_DIR,
+    TEXTS_DIR,
+)
+
+from .ingestion import IngestionPipeline, clean_document_text
 
 
 def reset_storage_db():
@@ -147,7 +154,7 @@ def index_preparsed_markdown_files(output_dir: Path, pipeline: IngestionPipeline
                     parsed_files.append(f)
 
     if not parsed_files:
-        print(f"  ⚠ No pre-parsed Markdown files found. Skipping Phase 2.\n")
+        print("  ⚠ No pre-parsed Markdown files found. Skipping Phase 2.\n")
         return set()
 
     print(f"  ✔ Found {len(parsed_files)} pre-parsed Markdown files.")

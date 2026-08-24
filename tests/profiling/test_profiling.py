@@ -1,8 +1,11 @@
 import time
+
 import pytest
-from src.monitoring.profiler import PipelineProfiler, StageTimer
+
 from src.monitoring.diagnostic_report import DiagnosticAnalyzer
+from src.monitoring.profiler import PipelineProfiler
 from src.rag_chatbot_engine import RAGChatbotEngine
+
 
 @pytest.mark.profiling
 class TestPipelineProfiling:
@@ -26,7 +29,7 @@ class TestPipelineProfiling:
         profiler = PipelineProfiler(request_id="test_req_003")
         profiler.record_stage("cache", 1.5)
         profiler.record_stage("bm25", 25.0, {"hits": 15})
-        
+
         report = profiler.generate_report()
         assert report["request_id"] == "test_req_003"
         assert "total_latency_ms" in report
@@ -38,7 +41,7 @@ class TestPipelineProfiling:
         profiler = PipelineProfiler(request_id="test_req_004")
         profiler.record_stage("normalization", 5.0)
         profiler.record_stage("rrf", 12.0)
-        
+
         breakdown_str = profiler.format_text_breakdown()
         assert "REQUEST test_req_004" in breakdown_str
         assert "Normalization" in breakdown_str
@@ -56,7 +59,7 @@ class TestPipelineProfiling:
                 "answer": {"llm_used": False}
             }
         }
-        
+
         diagnostics = DiagnosticAnalyzer.analyze_trace(report)
         assert any("BGE-M3 latency high" in d for d in diagnostics)
         assert any("Reranker latency high" in d for d in diagnostics)
@@ -65,13 +68,13 @@ class TestPipelineProfiling:
     def test_full_pipeline_profiling_benchmark(self, sample_queries):
         engine = RAGChatbotEngine()
         query = sample_queries["registration_msa"]
-        
+
         start_time = time.perf_counter()
         res = engine.process_query(query)
         end_time = time.perf_counter()
-        
+
         elapsed_total_ms = (end_time - start_time) * 1000.0
-        
+
         assert "profiling" in res
         profiling = res["profiling"]
         assert profiling["total_latency_ms"] > 0

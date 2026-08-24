@@ -1,4 +1,5 @@
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 
 class RRFFusion:
     """Reciprocal Rank Fusion (RRF) algorithm combining multi-branch retrieval lists."""

@@ -1,5 +1,7 @@
 import pytest
-from src.pipeline.stage_04_answer.generator_agent import ResponseGeneratorAgent, strip_reasoning, clean_formatting
+
+from src.pipeline.stage_04_answer.generator_agent import ResponseGeneratorAgent, clean_formatting, strip_reasoning
+
 
 @pytest.mark.unit
 class TestResponseGeneratorAgent:

@@ -1,15 +1,10 @@
-import os
-import re
 import json
-import time
+import re
+from typing import Any, Dict, Generator, List, Tuple
+
 import requests
-from typing import Dict, Any, List, Tuple, Optional, Generator
 
-from src.config import (
-    OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_KEEP_ALIVE,
-    NUM_CTX, NUM_PREDICT, RELEVANCE_THRESHOLD
-)
-
+from src.config import NUM_CTX, NUM_PREDICT, OLLAMA_CHAT_MODEL, OLLAMA_KEEP_ALIVE, OLLAMA_URL
 
 _THINK_OPEN_RE = re.compile(r'<\s*(think|thinking|reasoning)\s*>', re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r'</\s*(think|thinking|reasoning)\s*>', re.IGNORECASE)
@@ -86,6 +81,8 @@ def clean_formatting(text: str) -> str:
     cleaned = strip_reasoning(text)
     cleaned = re.sub(r'\*+', '', cleaned)
     cleaned = re.sub(r'^#+\s*', '', cleaned, flags=re.MULTILINE)
+    # Strip any inline source tags like [المصدر 1] or [Source 2]
+    cleaned = re.sub(r'\[\s*(المصدر|المصادر|Source|Sources)\s*[\d\.\, ]+\]', '', cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
 
 
@@ -104,19 +101,27 @@ class ResponseGeneratorAgent:
         accumulated_chars = 0
         included_sources = []
 
+        seen_parent_ids = set()
         for src in sources:
+            parent_id = src.get("parent_id") or src.get("chunk_id")
+            if parent_id and parent_id in seen_parent_ids:
+                continue
+
             score = src.get("similarity_score", 0)
             rank = len(included_sources) + 1
             title = src.get("title", "وثيقة")
             section = src.get("section_title", "")
-            raw_text = src.get("text", "").strip()
+            raw_text = (src.get("parent_text") or src.get("text", "")).strip()
             if not raw_text:
                 continue
+
+            if parent_id:
+                seen_parent_ids.add(parent_id)
 
             header = f"[المصدر {rank}] {title}"
             if section:
                 header += f" — {section}"
-            header += f" (نسبة التطابق: {score}%)"
+            header += f" (درجة التوافق: {score})"
 
             block_str = f"{header}\n{raw_text}\n"
             if accumulated_chars + len(block_str) > MAX_CONTEXT_CHARS and context_blocks:
@@ -135,15 +140,15 @@ class ResponseGeneratorAgent:
         is_english = acc_lower in ("english", "en", "mixed") or acc_lower.startswith("en")
         if is_english:
             system_prompt = (
-                f"You are an Eng-Guild information assistant for the Jordan Engineers Association (JEA).\n"
-                f"Strict Response Guidelines (AGENTS.md):\n"
-                f"1. GIVE THE DIRECT ANSWER FIRST in sentence 1 at the very top. ZERO preamble, ZERO introductory filler, ZERO greeting.\n"
-                f"2. Mandatory Structure: Direct Answer -> Essential Details -> Actionable Next Steps.\n"
-                f"3. Short Sentences & Maximum Density: Write using short, concise sentences. Retain maximum factual detail while eliminating fluff.\n"
-                f"4. Language Matching: Respond strictly in professional English.\n"
-                f"5. Source Citation: Cite source numbers like [Source 1], [Source 2] next to facts.\n"
-                f"6. NO Chatbot Artifacts: NO generic sign-offs ('Let me know if you need anything else'), NO conversational filler.\n"
-                f"7. Accuracy: Do NOT invent facts. If missing, state: 'I couldn't find that information in the guild resources.'\n"
+                "You are an Eng-Guild information assistant for the Jordan Engineers Association (JEA).\n"
+                "Strict Response Guidelines (AGENTS.md):\n"
+                "1. GIVE THE DIRECT ANSWER FIRST in sentence 1 at the very top. ZERO preamble, ZERO introductory filler, ZERO greeting.\n"
+                "2. Mandatory Structure: Direct Answer -> Essential Details -> Actionable Next Steps.\n"
+                "3. Short Sentences & Maximum Density: Write using short, concise sentences. Retain maximum factual detail while eliminating fluff.\n"
+                "4. Language Matching: Respond strictly in professional English.\n"
+                "5. NO Source Citations: Do NOT mention source tags or brackets like [Source 1] or [Source 2] inside your answer text.\n"
+                "6. NO Chatbot Artifacts: NO generic sign-offs ('Let me know if you need anything else'), NO conversational filler.\n"
+                "7. Accuracy: Do NOT invent facts. If missing, state: 'I couldn't find that information in the guild resources.'\n"
             )
             full_prompt = (
                 f"{system_prompt}\n"
@@ -167,7 +172,7 @@ class ResponseGeneratorAgent:
                 f"2. الهيكل الإجباري للإجابة: [الإجابة المباشرة] ← [التفاصيل الجوهرية والنقاط الأساسية] ← [الخطوات أو الإجراءات العملية التالية].\n"
                 f"3. الجمل القصيرة والكثافة العالية: اكتب في جمل قصيرة ومباشرة، وحافظ على جميع التفاصيل والمعلومات الدقيقة مع إلغاء الكلمات الزائدة الحشو.\n"
                 f"4. {lang_instruction}\n"
-                f"5. التوثيق: اذكر رقم المصدر [المصدر N] بجانب كل معلومة واستشهاد.\n"
+                f"5. عدم كتابة أرقام المصادر: يُمنع إدراج أرقام المصادر بين الأقواس مثل [المصدر 1] أو [المصدر N] داخل جمل الإجابة. اكتب الإجابة بسلاسة واحترافية وبدون رموز المصادر.\n"
                 f"6. خلو من المظاهر الزائفة: يُحظر إضافة أي خاتمة روتينية أو جمل ترحيبية أو عرض مساعدة إضافية في النهاية (مثل 'تختص النقابة...' أو 'في حال وجود استفسارات').\n"
                 f"7. الدقة والاعتماد على المصادر: اجب اعتماداً على المعلومات الواردة في المصادر المرفقة بأعلاه، والخص كافة التفاصيل والخطوات والشروط المذكورة بدقة.\n"
             )

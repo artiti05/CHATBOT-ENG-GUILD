@@ -1,4 +1,5 @@
 import pytest
+
 from src.pipeline.stage_01_understand.query_preprocessor import QueryPreprocessor
 
 

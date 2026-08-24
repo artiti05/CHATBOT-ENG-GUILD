@@ -1,19 +1,17 @@
-import time
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Optional
 
-from src.monitoring.tracing import RequestTracer
-from src.monitoring.profiler import PipelineProfiler
-from src.monitoring.diagnostic_report import DiagnosticAnalyzer
-
-from src.pipeline.stage_01_understand.query_preprocessor import QueryPreprocessor
 from src.cache_db.semantic_cache import SemanticCache
+from src.monitoring.diagnostic_report import DiagnosticAnalyzer
+from src.monitoring.profiler import PipelineProfiler
+from src.monitoring.tracing import RequestTracer
+from src.pipeline.stage_01_understand.query_preprocessor import QueryPreprocessor
 from src.pipeline.stage_02_retrieve.bm25_retriever import BM25Retriever
+from src.pipeline.stage_02_retrieve.retriever_agent import RetrieverAgent
 from src.pipeline.stage_02_retrieve.rrf_fusion import RRFFusion
-from src.pipeline.stage_03_verify_rerank.reranker import PriorityReranker
 from src.pipeline.stage_03_verify_rerank.confidence import DeterministicConfidenceEvaluator
+from src.pipeline.stage_03_verify_rerank.reranker import PriorityReranker
 from src.pipeline.stage_04_answer.answer_router import AnswerRouter
 from src.pipeline.stage_04_answer.generator_agent import ResponseGeneratorAgent
-from src.pipeline.stage_02_retrieve.retriever_agent import RetrieverAgent
 
 
 class RAGChatbotEngine:
@@ -34,13 +32,14 @@ class RAGChatbotEngine:
         self.router = AnswerRouter()
         self.generator = ResponseGeneratorAgent()
 
-    def process_query(self, user_query: str) -> Dict[str, Any]:
+    def process_query(self, user_query: str, history: List[Dict[str, str]] = None, session_id: str = None) -> Dict[str, Any]:
         request_id = RequestTracer.generate_request_id()
         profiler = PipelineProfiler(request_id)
 
-        # 1. Cache Stage
+        # 1. Embed & Cache Stage (Session-Scoped)
         with profiler.time_stage("cache"):
-            cached_res = self.cache.get(user_query)
+            query_vec = self.retriever.embedder.embed_single_text(user_query) if hasattr(self.retriever, "embedder") else None
+            cached_res = self.cache.get(user_query, query_vec=query_vec, session_id=session_id)
             if cached_res:
                 report = profiler.generate_report()
                 profiler.write_request_log(user_query, cached_res["answer"], cache_hit=True, route="CACHE")
@@ -64,7 +63,7 @@ class RAGChatbotEngine:
 
         # 4. MSA Conversion & Multi-Representation Stage
         with profiler.time_stage("msa_conversion"):
-            query_obj = self.nlp_pipeline.process(user_query)
+            query_obj = self.nlp_pipeline.process(user_query, history=history)
 
         # 5. Intent Stage
         with profiler.time_stage("intent"):
@@ -72,7 +71,8 @@ class RAGChatbotEngine:
 
         # 6-9. Dense Vector & Sparse Hybrid Retrieval Stage
         with profiler.time_stage("bm25"):
-            fused_cands = self.retriever.retrieve_hybrid(query_obj["normalized_text"], top_k=15)
+            search_query = query_obj.get("canonical_msa") or query_obj.get("normalized_text")
+            fused_cands = self.retriever.retrieve_hybrid(search_query, top_k=15, query_vec=query_vec)
 
         with profiler.time_stage("bge_m3"):
             pass
@@ -85,7 +85,7 @@ class RAGChatbotEngine:
 
         # 10. Reranker & Priority Boost Stage
         with profiler.time_stage("priority"):
-            reranked_cands = self.reranker.apply_priority_boost(fused_cands)
+            reranked_cands = self.reranker.rerank(search_query, fused_cands) if hasattr(self.reranker, "rerank") else self.reranker.apply_priority_boost(fused_cands)
 
         # 11. CRAG & Confidence Stage
         with profiler.time_stage("crag"):
@@ -97,9 +97,8 @@ class RAGChatbotEngine:
             route = route_res["route"]
 
             if route == "DETERMINISTIC":
-                primary_intent = query_obj["intent"][0] if query_obj["intent"] else "MEMBERSHIP"
-                tmpl_ans = StructuredAnswerTemplates.get_template_answer(primary_intent)
-                answer_text = tmpl_ans or "يرجى زيارة بوابة نقابة المهندسين للحصول على التفاصيل."
+                answer_text = "يرجى زيارة بوابة نقابة المهندسين (jea.org.jo) للحصول على التفاصيل والخدمات الرسمية."
+
             else:
                 prompt_str, sources_used = self.generator.build_prompt(
                     query=user_query,
@@ -113,9 +112,9 @@ class RAGChatbotEngine:
                 else:
                     answer_text = "لم أتمكن من العثور على معلومات دقيقة."
 
-        # Cache final answer if valid
+        # Cache final answer if valid (with session_id)
         if answer_text:
-            self.cache.put(user_query, answer_text, reranked_cands[:3])
+            self.cache.put(user_query, answer_text, reranked_cands[:3], query_vec=query_vec, session_id=session_id)
 
         profiler.record_stage("answer", profiler.stage_latencies["answer"], {"route": route})
         report = profiler.generate_report()

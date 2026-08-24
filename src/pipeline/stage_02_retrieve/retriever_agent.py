@@ -1,10 +1,13 @@
-from typing import List, Dict, Any, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional
+
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
-from src.config import CHROMA_PERSIST_DIR, CHROMA_COLLECTION_NAME
+from src.config import CHROMA_COLLECTION_NAME, CHROMA_PERSIST_DIR
+
 from .bm25_search import BM25Indexer
+
 
 class RetrieverAgent:
     """
@@ -19,7 +22,10 @@ class RetrieverAgent:
             path=str(CHROMA_PERSIST_DIR),
             settings=ChromaSettings(anonymized_telemetry=False)
         )
-        self.collection = self.client.get_or_create_collection(name=CHROMA_COLLECTION_NAME)
+        self.collection = self.client.get_or_create_collection(
+            name=CHROMA_COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine", "description": "Guild Knowledge Base BGE-M3 Embeddings"}
+        )
         self.embedder = BGEM3Embedder()
         self.bm25 = BM25Indexer()
 
@@ -118,7 +124,7 @@ class RetrieverAgent:
 
         # Sort by RRF score
         sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)[:top_k]
-        
+
         merged_results = []
         for cid in sorted_ids:
             chunk_obj = rrf_map[cid]

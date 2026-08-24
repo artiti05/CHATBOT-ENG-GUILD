@@ -1,8 +1,8 @@
-import sys
-import json
 import argparse
+import json
+import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List
 
 # Configure UTF-8 encoding for Windows terminals
 if hasattr(sys.stdout, "reconfigure"):
@@ -16,11 +16,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from src.config import CHILD_CHUNK_TOKENS, CHUNKING_LOGS_DIR, MARKDOWNS_DIR, OUTPUT_DIR, PARENT_CHUNK_TOKENS, TEXTS_DIR
+
 from .ingestion import TextChunker, clean_document_text
-from src.config import (
-    MARKDOWNS_DIR, TEXTS_DIR, OUTPUT_DIR, CHUNKING_LOGS_DIR,
-    PARENT_CHUNK_TOKENS, CHILD_CHUNK_TOKENS
-)
 
 
 def list_available_parsed_files() -> List[Path]:
@@ -61,7 +59,7 @@ def inspect_file_chunking(file_path: Path):
     total_words = len(cleaned_text.split())
     total_chars = len(cleaned_text)
 
-    print(f"\n📊 Document Overview:")
+    print("\n📊 Document Overview:")
     print(f"  • Total Words: {total_words:,}")
     print(f"  • Total Characters: {total_chars:,}")
     print(f"  • Settings: Parent Block = {PARENT_CHUNK_TOKENS} tokens | Child Chunk = {CHILD_CHUNK_TOKENS} tokens")
@@ -90,10 +88,10 @@ def inspect_file_chunking(file_path: Path):
         print(f"\n🔹 [CHILD CHUNK #{i}] ID: {cid}")
         print(f"   • Linked Parent Block ID: {pid}")
         print(f"   • Metrics: {words} words | ~{tokens} tokens | {len(text)} characters")
-        print(f"   • Child Text Preview:")
+        print("   • Child Text Preview:")
         child_preview = text[:200].replace("\n", " ")
         print(f"     \"{child_preview}...\"")
-        print(f"   • Parent Block Context Preview:")
+        print("   • Parent Block Context Preview:")
         parent_preview = p_text[:250].replace("\n", " ")
         print(f"     \"{parent_preview}...\"")
         print("-" * 80)

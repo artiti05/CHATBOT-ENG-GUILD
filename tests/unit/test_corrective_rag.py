@@ -1,6 +1,8 @@
 import pytest
+
 from src.pipeline.stage_03_verify_rerank.confidence import DeterministicConfidenceEvaluator
 from src.pipeline.stage_04_answer.answer_router import AnswerRouter
+
 
 @pytest.mark.unit
 class TestDeterministicConfidenceEvaluator:
@@ -32,3 +34,17 @@ class TestAnswerRouter:
         res = self.router.route(query_obj, conf_res)
         assert res["route"] == "GENERATION"
         assert res["llm_required"] is True
+
+    def test_route_medium_query_expansion(self):
+        query_obj = {"intent": ["MEMBERSHIP"]}
+        conf_res = {"decision": "MEDIUM", "score": 0.55}
+        res = self.router.route(query_obj, conf_res)
+        assert res["route"] == "QUERY_EXPANSION"
+        assert res["llm_required"] is True
+
+    def test_route_low_deterministic_fallback(self):
+        query_obj = {"intent": ["MEMBERSHIP"]}
+        conf_res = {"decision": "LOW", "score": 0.20}
+        res = self.router.route(query_obj, conf_res)
+        assert res["route"] == "DETERMINISTIC"
+        assert res["llm_required"] is False

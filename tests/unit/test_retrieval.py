@@ -1,7 +1,9 @@
 import pytest
+
+from src.pipeline.stage_02_retrieve.bm25_retriever import BM25Retriever
 from src.pipeline.stage_02_retrieve.rrf_fusion import RRFFusion
 from src.pipeline.stage_03_verify_rerank.reranker import PriorityReranker
-from src.pipeline.stage_02_retrieve.bm25_retriever import BM25Retriever
+
 
 @pytest.mark.unit
 class TestRRFFusion:

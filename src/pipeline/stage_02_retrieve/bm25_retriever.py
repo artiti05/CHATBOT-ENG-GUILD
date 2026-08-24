@@ -1,5 +1,7 @@
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 from .bm25_search import BM25Indexer
+
 
 class BM25Retriever:
     """Wrapper around BM25Indexer for retrieving keyword matches as unified document dicts."""

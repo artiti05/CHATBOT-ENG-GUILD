@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from typing import Optional, List
+
 from src.api.dependencies import verify_user_key
-from src.core.rag_engine import RAGChatbot, KnowledgeRetriever
-from src.config import REGISTRY_DB_PATH
+from src.core.rag_engine import KnowledgeRetriever, RAGChatbot
 
 router = APIRouter()
 chatbot = RAGChatbot()
@@ -49,7 +50,7 @@ def chat_with_kb(req: Optional[ChatRequest] = None, query: Optional[str] = Query
     hist_dicts = []
     if req and req.history:
         hist_dicts = [{"role": h.role, "content": h.content} for h in req.history]
-    
+
     response = chatbot.answer_question(query=q, history=hist_dicts, top_k=k)
     return response
 

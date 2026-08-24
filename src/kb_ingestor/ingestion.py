@@ -1,22 +1,17 @@
-import os
-import gc
-import re
-import sys
-import time
 import base64
+import gc
 import hashlib
-import sqlite3
-import unicodedata
+import re
 import shutil
+import unicodedata
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
+import chromadb
 import cv2
 import fitz  # PyMuPDF
 import numpy as np
-import pdfplumber
 import requests
-import chromadb
 from chromadb.config import Settings as ChromaSettings
 
 try:
@@ -32,13 +27,28 @@ except ImportError:
     HAS_BGEM3 = False
 
 from src.config import (
-    BASE_DIR, STORAGE_DIR, CHROMA_PERSIST_DIR, REGISTRY_DB_PATH,
-    CHROMA_COLLECTION_NAME, BGE_M3_MODEL_NAME, USE_FP16, PARENT_CHUNK_TOKENS,
-    PARENT_OVERLAP_TOKENS, CHILD_CHUNK_TOKENS, CHILD_OVERLAP_TOKENS,
-    OLLAMA_URL, OLLAMA_VISION_MODEL, PARSED_OUTPUT_DIR, MARKDOWNS_DIR,
-    RENDER_DPI, CLAHE_CLIP_LIMIT, CLAHE_TILE_GRID, MIN_TABLE_AREA_FRACTION,
-    TABLE_UPSCALE_FACTOR, TABLE_CROP_PADDING, REQUEST_TIMEOUT, NUM_CTX, NUM_PREDICT,
-    FILES_DIR, TEXTS_DIR, PDFS_DIR, IGNORE_TEXTS_DIR, EXCLUDE_DIRS, UNIFIED_VISION_PROMPT
+    BGE_M3_MODEL_NAME,
+    CHILD_CHUNK_TOKENS,
+    CHILD_OVERLAP_TOKENS,
+    CHROMA_COLLECTION_NAME,
+    CHROMA_PERSIST_DIR,
+    CLAHE_CLIP_LIMIT,
+    CLAHE_TILE_GRID,
+    MARKDOWNS_DIR,
+    MIN_TABLE_AREA_FRACTION,
+    NUM_CTX,
+    NUM_PREDICT,
+    OLLAMA_URL,
+    OLLAMA_VISION_MODEL,
+    PARENT_CHUNK_TOKENS,
+    PARENT_OVERLAP_TOKENS,
+    PARSED_OUTPUT_DIR,
+    RENDER_DPI,
+    REQUEST_TIMEOUT,
+    TABLE_CROP_PADDING,
+    TABLE_UPSCALE_FACTOR,
+    UNIFIED_VISION_PROMPT,
+    USE_FP16,
 )
 from src.pipeline.stage_02_retrieve.bm25_search import BM25Indexer
 
@@ -393,7 +403,7 @@ class TextChunker:
             return []
 
         parent_word_blocks = self._split_into_word_chunks(words, self.words_per_parent, self.words_parent_overlap)
-        
+
         child_chunks = []
         global_child_idx = 1
 
@@ -402,7 +412,7 @@ class TextChunker:
             parent_str = " ".join(p_words)
 
             child_word_blocks = self._split_into_word_chunks(p_words, self.words_per_child, self.words_child_overlap)
-            
+
             for c_idx, c_words in enumerate(child_word_blocks, start=1):
                 child_str = " ".join(c_words)
                 child_chunks.append({
@@ -439,8 +449,8 @@ class BGEM3Embedder:
                 self.model = BGEM3FlagModel(BGE_M3_MODEL_NAME, use_fp16=USE_FP16)
                 print("[Embedder] Successfully loaded BGE-M3 model.")
             except Exception as e:
-                print(f"[Embedder Warning] Could not load BGE-M3 model: {e}")
-                self.model = None
+                print(f"[Embedder Error] Could not load BGE-M3 model: {e}")
+                raise RuntimeError(f"Failed to initialize embedding model: {e}") from e
 
     def embed_texts(self, texts: List[str]) -> Tuple[List[List[float]], List[Dict[str, float]]]:
         if not texts:
@@ -451,13 +461,15 @@ class BGEM3Embedder:
             sparse_vecs = out['lexical_weights']
             return dense_vecs, sparse_vecs
         else:
-            return [[0.0] * 1024 for _ in texts], [{}] * len(texts)
+            raise RuntimeError("BGE-M3 embedding model is not loaded. Cannot generate vector embeddings.")
 
     def embed_single_text(self, text: str) -> List[float]:
         if not text or not text.strip():
-            return [0.0] * 1024
+            raise ValueError("Cannot embed empty or blank text string.")
         dense_vecs, _ = self.embed_texts([text])
-        return dense_vecs[0] if dense_vecs else [0.0] * 1024
+        if not dense_vecs:
+            raise RuntimeError("Embedding model produced empty dense vector output.")
+        return dense_vecs[0]
 
 
 class ChromaIndexer:

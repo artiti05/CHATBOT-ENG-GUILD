@@ -1,6 +1,8 @@
 import os
+
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,7 +38,7 @@ BM25_INDEX_PATH = STORAGE_DIR / "bm25_index.pkl"
 CACHE_PERSIST_PATH = STORAGE_DIR / "semantic_cache.json"
 
 # Semantic Cache Settings
-CACHE_SIMILARITY_THRESHOLD = 0.88
+CACHE_SIMILARITY_THRESHOLD = 0.90
 CACHE_MAX_ENTRIES = 1000
 
 # Ensure storage directories exist
@@ -52,7 +54,9 @@ QWEN_EMBEDDING_MODEL_NAME = os.getenv("QWEN_EMBEDDING_MODEL_NAME", "Alibaba-NLP/
 BGE_M3_MODEL_NAME = "BAAI/bge-m3"
 BGE_RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 ENABLE_ARAT5_REWRITER = os.getenv("ENABLE_ARAT5_REWRITER", "true").lower() in ("1", "true", "yes")
-ARAT5_MODEL_NAME = os.getenv("ARAT5_MODEL_NAME", "UBC-NLP/AraT5-base")
+LOCAL_ARAT5_PATH = BASE_DIR / "araT5" / "models" / "arat5-dialect-msa"
+DEFAULT_ARAT5_MODEL = str(LOCAL_ARAT5_PATH) if LOCAL_ARAT5_PATH.exists() else "UBC-NLP/AraT5-base"
+ARAT5_MODEL_NAME = os.getenv("ARAT5_MODEL_NAME", DEFAULT_ARAT5_MODEL)
 USE_FP16 = True
 
 # Reranker score threshold — chunks below raw logit 0.0 (sigmoid 50%) are strictly discarded

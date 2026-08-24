@@ -6,7 +6,9 @@ __pycache__/
 *.pyc
 *.pyo
 *.log
-*.env          # keep secrets out of the image
+# keep secrets out of the image
+.env
+*.env
 data/
 db/
 docker-compose.yml
