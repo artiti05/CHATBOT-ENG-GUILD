@@ -2,13 +2,15 @@ import os
 import re
 import json
 import time
-import requests
-from typing import Dict, Any, List, Tuple, Optional, Generator
+import logging
+import httpx
+from typing import Dict, Any, List, Tuple, Optional, AsyncGenerator
 
 from src.config import (
-    OLLAMA_URL, OLLAMA_CHAT_MODEL, OLLAMA_KEEP_ALIVE,
-    NUM_CTX, NUM_PREDICT, RELEVANCE_THRESHOLD
+    VLLM_CHAT_URL, VLLM_CHAT_MODEL, NUM_PREDICT, RELEVANCE_THRESHOLD
 )
+
+logger = logging.getLogger(__name__)
 
 
 _THINK_OPEN_RE = re.compile(r'<\s*(think|thinking|reasoning)\s*>', re.IGNORECASE)
@@ -90,8 +92,8 @@ def clean_formatting(text: str) -> str:
 
 
 class ResponseGeneratorAgent:
-    def __init__(self, ollama_url: str = OLLAMA_URL, model: str = OLLAMA_CHAT_MODEL):
-        self.ollama_url = ollama_url
+    def __init__(self, vllm_url: str = VLLM_CHAT_URL, model: str = VLLM_CHAT_MODEL):
+        self.vllm_url = vllm_url
         self.model = model
 
     def build_prompt(self,
@@ -184,72 +186,75 @@ class ResponseGeneratorAgent:
 
         return full_prompt, included_sources
 
-    def generate(self, prompt: str) -> Tuple[str, bool]:
+    async def generate(self, prompt: str) -> Tuple[str, bool]:
+        """Batch generation against the vLLM OpenAI-compatible chat endpoint."""
         if not prompt:
             return "", False
 
-        models_to_try = [self.model, "qwen2.5:7b", "ministral-3:3b-instruct-2512-q4_K_M"]
-        for model_tag in models_to_try:
-            try:
-                payload = {
-                    "model": model_tag,
-                    "prompt": prompt,
-                    "stream": False,
-                    "think": False,
-                    "keep_alive": OLLAMA_KEEP_ALIVE,
-                    "options": {
-                        "temperature": 0.1,
-                        "num_predict": NUM_PREDICT,
-                        "num_ctx": NUM_CTX
-                    }
-                }
-                res = requests.post(self.ollama_url, json=payload, timeout=(3.0, 120.0))
-                if res.status_code == 200:
-                    content = res.json().get("response", "").strip()
-                    if content:
-                        return clean_formatting(content), True
-            except Exception:
-                continue
+        try:
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "temperature": 0.1,
+                "max_tokens": NUM_PREDICT,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=3.0)) as client:
+                res = await client.post(self.vllm_url, json=payload)
+            if res.status_code == 200:
+                content = res.json()["choices"][0]["message"]["content"].strip()
+                if content:
+                    return clean_formatting(content), True
+            else:
+                logger.warning("[GeneratorAgent] vLLM returned %s: %s", res.status_code, res.text[:300])
+        except Exception:
+            logger.exception("[GeneratorAgent] generate() failed calling vLLM at %s", self.vllm_url)
 
         return "", False
 
-    def generate_stream(self, prompt: str) -> Generator[str, None, None]:
+    async def generate_stream(self, prompt: str) -> AsyncGenerator[str, None]:
+        """Yields real-time token chunks from the vLLM chat endpoint with stream=True."""
         if not prompt:
             return
 
-        models_to_try = [self.model, "qwen2.5:7b", "ministral-3:3b-instruct-2512-q4_K_M"]
-        for model_tag in models_to_try:
-            try:
-                payload = {
-                    "model": model_tag,
-                    "prompt": prompt,
-                    "stream": True,
-                    "think": False,
-                    "keep_alive": OLLAMA_KEEP_ALIVE,
-                    "options": {
-                        "temperature": 0.1,
-                        "num_predict": NUM_PREDICT,
-                        "num_ctx": NUM_CTX
-                    }
-                }
-                res = requests.post(self.ollama_url, json=payload, stream=True, timeout=(3.0, 120.0))
-                if res.status_code == 200:
+        try:
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "temperature": 0.1,
+                "max_tokens": NUM_PREDICT,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=3.0)) as client:
+                async with client.stream("POST", self.vllm_url, json=payload) as res:
+                    if res.status_code != 200:
+                        body = await res.aread()
+                        logger.warning("[GeneratorAgent] vLLM stream returned %s: %s", res.status_code, body[:300])
+                        return
+
                     reasoning_filter = ReasoningStreamFilter()
-                    for line in res.iter_lines():
-                        if line:
-                            try:
-                                chunk_json = json.loads(line.decode('utf-8'))
-                                token = chunk_json.get("response", "")
-                                safe = reasoning_filter.feed(token)
-                                safe = safe.replace("*", "").replace("#", "")
-                                if safe:
-                                    yield safe
-                            except Exception:
-                                pass
+                    async for line in res.aiter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk_json = json.loads(data)
+                            delta = chunk_json["choices"][0].get("delta", {})
+                            token = delta.get("content") or ""
+                            safe = reasoning_filter.feed(token)
+                            safe = safe.replace("*", "").replace("#", "")
+                            if safe:
+                                yield safe
+                        except Exception:
+                            logger.exception("[GeneratorAgent] Failed to parse vLLM stream chunk: %r", data[:300])
+
                     tail = reasoning_filter.flush()
                     tail = tail.replace("*", "").replace("#", "")
                     if tail:
                         yield tail
-                    return
-            except Exception:
-                continue
+        except Exception:
+            logger.exception("[GeneratorAgent] generate_stream() failed calling vLLM at %s", self.vllm_url)

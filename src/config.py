@@ -55,6 +55,13 @@ ENABLE_ARAT5_REWRITER = os.getenv("ENABLE_ARAT5_REWRITER", "true").lower() in ("
 ARAT5_MODEL_NAME = os.getenv("ARAT5_MODEL_NAME", "UBC-NLP/AraT5-base")
 USE_FP16 = True
 
+# Minimum free VRAM (GB) required before a model is actually placed on GPU;
+# below this, src.core.gpu_utils.pick_device() falls back to CPU instead. This
+# keeps retrieval models off the GPU when the vLLM server has already claimed it.
+MIN_VRAM_GB_EMBEDDER = float(os.getenv("MIN_VRAM_GB_EMBEDDER", "2.0"))
+MIN_VRAM_GB_RERANKER = float(os.getenv("MIN_VRAM_GB_RERANKER", "2.8"))
+MIN_VRAM_GB_REWRITER = float(os.getenv("MIN_VRAM_GB_REWRITER", "1.5"))
+
 # Reranker score threshold — chunks below raw logit 0.0 (sigmoid 50%) are strictly discarded
 RERANK_THRESHOLD    = 0.0   # raw logit floor (50% match) — anything below is dropped BEFORE boost
 RELEVANCE_THRESHOLD = 40    # Minimum similarity percentage (40%) to include chunk in LLM context
@@ -100,6 +107,13 @@ CHUNK_OVERLAP_TOKENS = CHILD_OVERLAP_TOKENS
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
 
+# vLLM OpenAI-compatible chat endpoint. Replaces Ollama as the generation
+# backend for chat/rewrite/classification calls (~2.3x throughput). Ollama
+# settings above are retained: the vision/ingestion path still uses them.
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8001")
+VLLM_CHAT_URL = os.getenv("VLLM_CHAT_URL", f"{VLLM_BASE_URL}/v1/chat/completions")
+VLLM_CHAT_MODEL = os.getenv("VLLM_CHAT_MODEL", "jea-chat")   # must match --served-model-name
+
 EXPOSE_DEBUG_METADATA = os.getenv("EXPOSE_DEBUG_METADATA", "false").lower() in ("1", "true", "yes")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "ministral-3:8b")
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
@@ -110,6 +124,11 @@ CLAHE_TILE_GRID = (8, 8)
 MIN_TABLE_AREA_FRACTION = 0.02
 TABLE_UPSCALE_FACTOR = 2.0
 TABLE_CROP_PADDING = 10
+
+# Two-pass table-aware parsing (see src/kb_ingestor/ingestion.py process_vision_page)
+ENABLE_TABLE_ROUTING = os.getenv("ENABLE_TABLE_ROUTING", "1") == "1"
+SAVE_TABLE_DEBUG_IMAGES = os.getenv("SAVE_TABLE_DEBUG_IMAGES", "1") == "1"
+MAX_TABLES_PER_PAGE = int(os.getenv("MAX_TABLES_PER_PAGE", "8"))
 OLLAMA_KEEP_ALIVE = -1 if os.getenv("OLLAMA_KEEP_ALIVE", "-1") == "-1" else os.getenv("OLLAMA_KEEP_ALIVE")
 
 REQUEST_TIMEOUT = 300
@@ -141,4 +160,20 @@ Arabic tables are read right-to-left, and often have a top-level header cell tha
 multiple sub-columns below it (colspan). Do not flatten these into a single row of numbers.
 Keep the header hierarchy explicit using colspan, and keep column order as it visually
 appears on the page (rightmost visual column = first <td> in each row, since this is RTL).
+"""
+
+TABLE_VISION_PROMPT = """You are an expert table transcriber. This image contains exactly
+one table and nothing else -- no surrounding page text.
+
+Instructions:
+1. Output a single HTML <table> element using <table>, <tr>, <td>, <th>, and
+   colspan/rowspan attributes for merged cells. Do NOT use Markdown tables --
+   Markdown cannot express merged cells.
+2. Preserve RTL column order: the rightmost visual column is the first <td> in each row.
+3. Preserve header hierarchy. If a header cell spans multiple sub-columns, use colspan --
+   do not flatten it into a row of values.
+4. Do not translate anything. Keep Arabic text in Arabic and English text in English.
+5. Do not add commentary, explanations, notes, or markdown code fences. Output ONLY the
+   <table>...</table> element, nothing else.
+6. If a cell is unreadable, mark it as [UNREADABLE] rather than guessing.
 """

@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from src.rag_chatbot_engine import RAGChatbotEngine
 from src.core.rag_engine import RAGChatbot
@@ -11,7 +12,7 @@ class TestRAGPipelineIntegration:
 
     def test_process_query_end_to_end(self, sample_queries):
         query = sample_queries["registration_msa"]
-        res = self.engine.process_query(query)
+        res = asyncio.run(self.engine.process_query(query))
         
         assert "request_id" in res
         assert "query" in res
@@ -35,13 +36,13 @@ class TestRAGPipelineIntegration:
         self.engine.cache.put(query, answer, sources)
 
         # Process query
-        res = self.engine.process_query(query)
+        res = asyncio.run(self.engine.process_query(query))
         assert res["cache_hit"] is True
         assert res["answer"] == answer
 
     def test_wrapper_answer_question(self, sample_queries):
         query = sample_queries["salary_msa"]
-        res = self.wrapper.answer_question(query, top_k=5)
+        res = asyncio.run(self.wrapper.answer_question(query, top_k=5))
         
         assert "answer" in res
         assert "sources" in res

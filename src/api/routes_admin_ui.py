@@ -30,16 +30,25 @@ ADMIN_HTML = """<!DOCTYPE html>
   th, td { text-align:right; padding:8px 6px; border-bottom:1px solid #eef0f3; }
   th { color:var(--muted); font-weight:600; }
   .row-actions { white-space:nowrap; }
-  #status { font-size:.82rem; margin-top:10px; min-height:1.2em; }
-  #status.ok { color:var(--accent); } #status.err { color:var(--danger); }
+  #status, #ticketStatus { font-size:.82rem; margin-top:10px; min-height:1.2em; }
+  #status.ok, #ticketStatus.ok { color:var(--accent); } #status.err, #ticketStatus.err { color:var(--danger); }
   .flex { display:flex; gap:10px; align-items:end; flex-wrap:wrap; }
   .flex > div { flex:1; min-width:220px; }
+  .tabs { display:flex; gap:8px; margin-bottom:16px; }
+  .tab-btn { background:#eef2f6; color:#1a1f27; border-radius:10px 10px 0 0; }
+  .tab-btn.active { background:var(--accent); color:#fff; }
+  select.status-select { padding:6px 8px; border-radius:6px; border:1px solid #d0d5dd; font-size:.82rem; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:20px; font-size:.75rem; font-weight:600; }
+  .badge.open { background:#fde68a; color:#7c4a03; }
+  .badge.in_progress { background:#bfdbfe; color:#1e3a8a; }
+  .badge.resolved { background:#bbf7d0; color:#14532d; }
+  .badge.closed { background:#e2e8f0; color:#475569; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>لوحة إدارة قاعدة المعرفة</h1>
-  <div class="sub">إضافة وحذف وإعادة معالجة وثائق نظام الأسئلة والأجوبة</div>
+  <div class="sub">إضافة وحذف وإعادة معالجة وثائق نظام الأسئلة والأجوبة، ومتابعة تذاكر الدعم</div>
 
   <div class="card">
     <div class="flex">
@@ -48,24 +57,62 @@ ADMIN_HTML = """<!DOCTYPE html>
         <input type="password" id="adminKey" placeholder="أدخل مفتاح ADMIN_API_KEY">
       </div>
       <button class="secondary" onclick="saveKey()">حفظ المفتاح</button>
-      <button onclick="loadDocs()">تحديث القائمة</button>
     </div>
   </div>
 
-  <div class="card">
-    <label>رفع وثيقة جديدة (PDF / TXT / MD)</label>
-    <div class="flex">
-      <div><input type="file" id="fileInput" accept=".pdf,.txt,.md"></div>
-      <button id="uploadBtn" onclick="uploadFile()">رفع ومعالجة</button>
+  <div class="tabs">
+    <button class="tab-btn active" id="tabDocsBtn" onclick="switchTab('docs')">الوثائق</button>
+    <button class="tab-btn" id="tabTicketsBtn" onclick="switchTab('tickets')">التذاكر</button>
+  </div>
+
+  <div id="docsView">
+    <div class="card">
+      <label>رفع وثيقة جديدة (PDF / TXT / MD)</label>
+      <div class="flex">
+        <div><input type="file" id="fileInput" accept=".pdf,.txt,.md"></div>
+        <button id="uploadBtn" onclick="uploadFile()">رفع ومعالجة</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="flex">
+        <div></div>
+        <button onclick="loadDocs()">تحديث القائمة</button>
+      </div>
+      <table>
+        <thead><tr><th>الوثيقة</th><th>الحالة</th><th>الأجزاء</th><th class="row-actions">إجراءات</th></tr></thead>
+        <tbody id="docsBody"><tr><td colspan="4">اضغط "تحديث القائمة" للبدء</td></tr></tbody>
+      </table>
+      <div id="status"></div>
     </div>
   </div>
 
-  <div class="card">
-    <table>
-      <thead><tr><th>الوثيقة</th><th>الحالة</th><th>الأجزاء</th><th class="row-actions">إجراءات</th></tr></thead>
-      <tbody id="docsBody"><tr><td colspan="4">اضغط "تحديث القائمة" للبدء</td></tr></tbody>
-    </table>
-    <div id="status"></div>
+  <div id="ticketsView" style="display:none">
+    <div class="card">
+      <div class="flex">
+        <div>
+          <label for="ticketStatusFilter">تصفية حسب الحالة</label>
+          <select id="ticketStatusFilter" class="status-select" onchange="loadTickets()">
+            <option value="">الكل</option>
+            <option value="open">مفتوحة</option>
+            <option value="in_progress">قيد المعالجة</option>
+            <option value="resolved">تم الحل</option>
+            <option value="closed">مغلقة</option>
+          </select>
+        </div>
+        <button onclick="loadTickets()">تحديث القائمة</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>التاريخ</th><th>السبب</th><th>الاسم</th><th>الهاتف</th>
+            <th>الرقم النقابي</th><th>تفاصيل الطلب</th><th>الحالة</th><th class="row-actions">إجراء</th>
+          </tr>
+        </thead>
+        <tbody id="ticketsBody"><tr><td colspan="9">اضغط "تحديث القائمة" للبدء</td></tr></tbody>
+      </table>
+      <div id="ticketStatus"></div>
+    </div>
   </div>
 </div>
 
@@ -167,6 +214,69 @@ async function reingestOne(encName) {
 
 function escapeHtml(t) {
   const d = document.createElement('div'); d.textContent = t; return d.innerHTML;
+}
+
+function switchTab(name) {
+  const isDocs = name === 'docs';
+  $('docsView').style.display = isDocs ? '' : 'none';
+  $('ticketsView').style.display = isDocs ? 'none' : '';
+  $('tabDocsBtn').classList.toggle('active', isDocs);
+  $('tabTicketsBtn').classList.toggle('active', !isDocs);
+  if (!isDocs) loadTickets();
+}
+
+function setTicketStatus(msg, cls) {
+  const s = $('ticketStatus'); s.textContent = msg; s.className = cls || '';
+}
+
+const REASON_LABELS = { user_intent: 'طلب مستخدم', low_confidence: 'ثقة منخفضة' };
+const STATUS_LABELS = { open: 'مفتوحة', in_progress: 'قيد المعالجة', resolved: 'تم الحل', closed: 'مغلقة' };
+
+async function loadTickets() {
+  setTicketStatus('جاري التحميل...');
+  try {
+    const filter = $('ticketStatusFilter').value;
+    const url = '/api/admin/tickets' + (filter ? ('?status=' + encodeURIComponent(filter)) : '');
+    const data = await guard(await fetch(url, { headers: hdrs() }));
+    const body = $('ticketsBody');
+    body.innerHTML = '';
+    if (!data.tickets || data.tickets.length === 0) {
+      body.innerHTML = '<tr><td colspan="9">لا توجد تذاكر حالياً.</td></tr>';
+    } else {
+      for (const t of data.tickets) {
+        const tr = document.createElement('tr');
+        const statusOptions = Object.keys(STATUS_LABELS).map(function (s) {
+          return '<option value="' + s + '"' + (s === t.status ? ' selected' : '') + '>' + STATUS_LABELS[s] + '</option>';
+        }).join('');
+        tr.innerHTML =
+          '<td>' + t.id + '</td>' +
+          '<td>' + escapeHtml(String(t.created_at || '—')) + '</td>' +
+          '<td>' + escapeHtml(REASON_LABELS[t.reason] || t.reason) + '</td>' +
+          '<td>' + escapeHtml(t.name || '—') + '</td>' +
+          '<td>' + escapeHtml(t.phone || '—') + '</td>' +
+          '<td>' + escapeHtml(t.engineer_number || '—') + '</td>' +
+          '<td>' + escapeHtml((t.issue_text || '') + (t.raw_contact_text ? (' | ' + t.raw_contact_text) : '')) + '</td>' +
+          '<td><span class="badge ' + t.status + '">' + (STATUS_LABELS[t.status] || t.status) + '</span></td>' +
+          '<td class="row-actions">' +
+            '<select class="status-select" onchange="updateTicketStatus(' + t.id + ', this.value)">' + statusOptions + '</select>' +
+          '</td>';
+        body.appendChild(tr);
+      }
+    }
+    setTicketStatus('عدد التذاكر: ' + (data.count ?? 0), 'ok');
+  } catch (e) { /* status already set */ }
+}
+
+async function updateTicketStatus(ticketId, newStatus) {
+  try {
+    const data = await guard(await fetch('/api/admin/tickets/' + ticketId + '/status', {
+      method: 'POST',
+      headers: hdrs({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: newStatus })
+    }));
+    setTicketStatus(data.message || 'تم تحديث الحالة.', 'ok');
+    loadTickets();
+  } catch (e) { /* status already set */ }
 }
 </script>
 </body>

@@ -26,6 +26,7 @@ Execution Modes:
 import sys
 import os
 import socket
+import asyncio
 import argparse
 from pathlib import Path
 
@@ -251,7 +252,7 @@ def run_terminal_chat(args=None):
                 print("\n👋 Goodbye!")
                 break
 
-            res = engine.process_query(user_input)
+            res = asyncio.run(engine.process_query(user_input))
             print("\n🤖 [Answer]:\n" + res["answer"])
             print("\n📊 [Performance & 13-Stage Latency Breakdown]:")
             print(res["text_breakdown"])

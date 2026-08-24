@@ -38,9 +38,12 @@ from src.config import (
     OLLAMA_URL, OLLAMA_VISION_MODEL, PARSED_OUTPUT_DIR, MARKDOWNS_DIR,
     RENDER_DPI, CLAHE_CLIP_LIMIT, CLAHE_TILE_GRID, MIN_TABLE_AREA_FRACTION,
     TABLE_UPSCALE_FACTOR, TABLE_CROP_PADDING, REQUEST_TIMEOUT, NUM_CTX, NUM_PREDICT,
-    FILES_DIR, TEXTS_DIR, PDFS_DIR, IGNORE_TEXTS_DIR, EXCLUDE_DIRS, UNIFIED_VISION_PROMPT
+    FILES_DIR, TEXTS_DIR, PDFS_DIR, IGNORE_TEXTS_DIR, EXCLUDE_DIRS, UNIFIED_VISION_PROMPT,
+    TABLE_VISION_PROMPT, ENABLE_TABLE_ROUTING, SAVE_TABLE_DEBUG_IMAGES, MAX_TABLES_PER_PAGE,
+    MIN_VRAM_GB_EMBEDDER
 )
 from src.pipeline.stage_02_retrieve.bm25_search import BM25Indexer
+from src.core.gpu_utils import pick_device
 
 
 def fix_reversed_arabic_text(text: str) -> str:
@@ -271,11 +274,134 @@ def call_vlm_vision_api(prompt: str, img_b64: str) -> str:
         return f"[ERROR calling Vision VLM: {e}]"
 
 
-def process_vision_page(gray_img: np.ndarray, page_num: int, debug_dir: Path) -> str:
+def _single_pass_page(gray_img: np.ndarray) -> str:
+    """Whole-page single-pass VLM transcription (legacy/fallback path)."""
     page_b64 = array_to_base64_png(gray_img)
     parsed_text = call_vlm_vision_api(UNIFIED_VISION_PROMPT, page_b64)
     del page_b64
     return parsed_text
+
+
+def _save_table_debug_image(gray_img: np.ndarray, boxes: List[Tuple[int, int, int, int]],
+                            page_num: int, debug_dir: Path) -> None:
+    """Saves an annotated copy of the page with detected table boxes drawn and labelled,
+    so detection quality (misses vs. false positives) can be checked visually."""
+    try:
+        annotated = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
+        for idx, (x, y, w, h) in enumerate(boxes, start=1):
+            cv2.rectangle(annotated, (x, y), (x + w, y + h), color=(0, 0, 255), thickness=3)
+            cv2.putText(annotated, f"TABLE_{idx}", (x + 5, max(y - 10, 15)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        out_path = debug_dir / f"page_{page_num:03d}_tables.png"
+        cv2_imwrite_unicode(out_path, annotated)
+        del annotated
+    except Exception as e:
+        print(f"[Vision Warning] Failed to save table debug image for page {page_num}: {e}")
+
+
+def _stitch_tables(prose_md: str, table_results: List[str], page_num: int) -> Tuple[str, int, int]:
+    """Substitutes each [[TABLE_i]] token in prose_md with its extracted table HTML.
+
+    Never silently drops a table:
+      - token found, extraction OK      -> token replaced with the table HTML.
+      - token found, extraction failed  -> token replaced with a greppable
+                                           [[TABLE_i: EXTRACTION_FAILED]] marker.
+      - token missing from the prose    -> the content (table HTML or failure marker) is
+                                           appended at the end under a
+                                           "<!-- TABLE_i (position unresolved) -->" comment.
+      - token appears more than once    -> only the first occurrence is replaced; logged.
+
+    Returns (stitched_text, tables_extracted, tokens_matched).
+    """
+    stitched = prose_md
+    tables_extracted = 0
+    tokens_matched = 0
+    unresolved: List[str] = []
+
+    for idx, table_md in enumerate(table_results, start=1):
+        table_html = table_md.strip() if table_md and table_md.strip() else ""
+        if table_html:
+            tables_extracted += 1
+            content = table_html
+        else:
+            content = f"[[TABLE_{idx}: EXTRACTION_FAILED]]"
+
+        token_pattern = re.compile(r'\[\[\s*TABLE[_\s]*' + str(idx) + r'\s*\]\]')
+        occurrences = list(token_pattern.finditer(stitched))
+
+        if not occurrences:
+            unresolved.append(f"<!-- TABLE_{idx} (position unresolved) -->\n{content}")
+            continue
+
+        if len(occurrences) > 1:
+            print(f"[Vision Warning] Page {page_num}: token TABLE_{idx} appears "
+                  f"{len(occurrences)} times in prose output; replacing first occurrence only.")
+
+        first = occurrences[0]
+        stitched = stitched[:first.start()] + content + stitched[first.end():]
+        tokens_matched += 1
+
+    if unresolved:
+        stitched = stitched + "\n\n" + "\n\n".join(unresolved)
+
+    return stitched, tables_extracted, tokens_matched
+
+
+def process_vision_page(gray_img: np.ndarray, page_num: int, debug_dir: Path) -> str:
+    """Two-pass table-aware Vision page parser.
+
+    Detects bordered tables with OpenCV, transcribes the page prose with those regions
+    masked out (Pass A), transcribes each table separately from a cropped/upscaled image
+    (Pass B), then stitches the results back together via the [[TABLE_i]] tokens stamped
+    by mask_tables_on_image. Falls back to a single whole-page VLM call when table routing
+    is disabled, no tables are detected, or detection finds more than MAX_TABLES_PER_PAGE
+    (likely a false-positive explosion).
+
+    Known limitation: detect_table_boxes only finds *bordered* tables (line morphology).
+    Borderless/whitespace-aligned tables, diagrams, and rule-only tables fall through to
+    the single-pass path below -- this is accepted, not a bug to fix here.
+    """
+    if not ENABLE_TABLE_ROUTING:
+        return _single_pass_page(gray_img)
+
+    boxes = detect_table_boxes(gray_img)
+
+    if SAVE_TABLE_DEBUG_IMAGES and boxes:
+        _save_table_debug_image(gray_img, boxes, page_num, debug_dir)
+
+    if not boxes:
+        return _single_pass_page(gray_img)
+
+    if len(boxes) > MAX_TABLES_PER_PAGE:
+        print(f"[Vision Warning] Page {page_num}: {len(boxes)} table(s) detected, "
+              f"exceeds MAX_TABLES_PER_PAGE={MAX_TABLES_PER_PAGE}; falling back to single-pass.")
+        return _single_pass_page(gray_img)
+
+    # Pass A: transcribe the page prose with table regions blanked out and stamped
+    # with [[TABLE_i]] tokens, so layout and reading order survive around the tables.
+    masked = mask_tables_on_image(gray_img, boxes)
+    masked_b64 = array_to_base64_png(masked)
+    del masked
+    prose_md = call_vlm_vision_api(UNIFIED_VISION_PROMPT, masked_b64)
+    del masked_b64
+
+    # Pass B: transcribe each table separately from its own cropped/upscaled image.
+    # Process and release one crop at a time -- never hold all of them in memory.
+    table_results: List[str] = []
+    for box in boxes:
+        crop = crop_table(gray_img, box)
+        crop_b64 = array_to_base64_png(crop)
+        del crop
+        table_md = call_vlm_vision_api(TABLE_VISION_PROMPT, crop_b64)
+        del crop_b64
+        table_results.append(table_md)
+
+    stitched, extracted, matched = _stitch_tables(prose_md, table_results, page_num)
+
+    print(f"[Vision] Page {page_num}: {len(boxes)} table(s) detected, "
+          f"{extracted} extracted, {matched} token(s) matched, two-pass parse.")
+    return stitched
 
 
 def parse_and_save_pdf_vision(pdf_path: Path) -> Tuple[str, Path, int]:
@@ -435,9 +561,11 @@ class BGEM3Embedder:
     def _load_model(self):
         if HAS_BGEM3:
             try:
-                print(f"[Embedder] Loading BGE-M3 model '{BGE_M3_MODEL_NAME}'...")
-                self.model = BGEM3FlagModel(BGE_M3_MODEL_NAME, use_fp16=USE_FP16)
-                print("[Embedder] Successfully loaded BGE-M3 model.")
+                device = pick_device(MIN_VRAM_GB_EMBEDDER)
+                print(f"[Embedder] Loading BGE-M3 model '{BGE_M3_MODEL_NAME}' on {device}...")
+                use_fp16 = USE_FP16 and device != "cpu"
+                self.model = BGEM3FlagModel(BGE_M3_MODEL_NAME, use_fp16=use_fp16, devices=device)
+                print(f"[Embedder] Device: {device}, fp16: {use_fp16}")
             except Exception as e:
                 print(f"[Embedder Warning] Could not load BGE-M3 model: {e}")
                 self.model = None

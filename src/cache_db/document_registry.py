@@ -94,6 +94,79 @@ class AdminManager:
     def list_documents(self) -> List[Dict[str, Any]]:
         return self.registry.list_documents()
 
+class TicketRegistry:
+    """Persists AI-triggered support tickets (see
+    src/pipeline/stage_05_ticket/ticket_agent.py). Ticket resolution itself is
+    a purely human process -- this class only stores and lists what employees
+    need to act on."""
+
+    def __init__(self, db_path: Path = REGISTRY_DB_PATH):
+        self.db_path = Path(db_path).resolve()
+        self._init_db()
+
+    def _get_connection(self):
+        return sqlite3.connect(str(self.db_path))
+
+    def _init_db(self):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tickets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reason TEXT NOT NULL,
+                    issue_text TEXT NOT NULL,
+                    name TEXT DEFAULT '',
+                    phone TEXT DEFAULT '',
+                    engineer_number TEXT DEFAULT '',
+                    raw_contact_text TEXT DEFAULT '',
+                    status TEXT DEFAULT 'open'
+                );
+            """)
+            conn.commit()
+
+    def create_ticket(self, reason: str, issue_text: str, contact: Dict[str, str]) -> int:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO tickets (reason, issue_text, name, phone, engineer_number, raw_contact_text, status)
+                VALUES (?, ?, ?, ?, ?, ?, 'open');
+            """, (
+                reason,
+                issue_text,
+                contact.get("name", ""),
+                contact.get("phone", ""),
+                contact.get("engineer_number", ""),
+                contact.get("raw_text", ""),
+            ))
+            conn.commit()
+            return cursor.lastrowid
+
+    def list_tickets(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            if status:
+                cursor.execute("SELECT * FROM tickets WHERE status = ? ORDER BY created_at DESC;", (status,))
+            else:
+                cursor.execute("SELECT * FROM tickets ORDER BY created_at DESC;")
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_ticket(self, ticket_id: int) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM tickets WHERE id = ?;", (ticket_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def update_status(self, ticket_id: int, status: str) -> None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE tickets SET status = ? WHERE id = ?;", (status, ticket_id))
+            conn.commit()
+
+
 class WebsiteCrawlerCache:
     def __init__(self, cache_dir: Path = CRAWL_CACHE_DIR):
         self.cache_dir = Path(cache_dir).resolve()

@@ -29,19 +29,19 @@ def extract_query_and_k(req: Optional[BaseModel], query_param: Optional[str], to
     return q, k
 
 @router.api_route("/search", methods=["GET", "POST"], dependencies=[Depends(verify_user_key)])
-def search_kb(req: Optional[SearchRequest] = None, query: Optional[str] = Query(None), top_k: int = Query(15)):
+async def search_kb(req: Optional[SearchRequest] = None, query: Optional[str] = Query(None), top_k: int = Query(15)):
     q, k = extract_query_and_k(req, query, top_k)
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
     try:
         retriever = KnowledgeRetriever()
-        results = retriever.retrieve(query_text=q, top_k=k)
+        results = await retriever.retrieve(query_text=q, top_k=k)
         return {"query": q, "results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.api_route("/chat", methods=["GET", "POST"], dependencies=[Depends(verify_user_key)])
-def chat_with_kb(req: Optional[ChatRequest] = None, query: Optional[str] = Query(None), top_k: int = Query(15)):
+async def chat_with_kb(req: Optional[ChatRequest] = None, query: Optional[str] = Query(None), top_k: int = Query(15)):
     q, k = extract_query_and_k(req, query, top_k)
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")
@@ -50,15 +50,15 @@ def chat_with_kb(req: Optional[ChatRequest] = None, query: Optional[str] = Query
     if req and req.history:
         hist_dicts = [{"role": h.role, "content": h.content} for h in req.history]
     
-    response = chatbot.answer_question(query=q, history=hist_dicts, top_k=k)
+    response = await chatbot.answer_question(query=q, history=hist_dicts, top_k=k)
     return response
 
 @router.api_route("/query", methods=["GET", "POST"], dependencies=[Depends(verify_user_key)])
-def query_alias(req: Optional[ChatRequest] = None, query: Optional[str] = Query(None), top_k: int = Query(15)):
-    return chat_with_kb(req=req, query=query, top_k=top_k)
+async def query_alias(req: Optional[ChatRequest] = None, query: Optional[str] = Query(None), top_k: int = Query(15)):
+    return await chat_with_kb(req=req, query=query, top_k=top_k)
 
 @router.api_route("/chat/stream", methods=["GET", "POST"], dependencies=[Depends(verify_user_key)])
-def chat_with_kb_stream(req: Optional[ChatRequest] = None, query: Optional[str] = Query(None), top_k: int = Query(15)):
+async def chat_with_kb_stream(req: Optional[ChatRequest] = None, query: Optional[str] = Query(None), top_k: int = Query(15)):
     q, k = extract_query_and_k(req, query, top_k)
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Query string cannot be empty.")

@@ -1,3 +1,4 @@
+import asyncio
 import time
 import pytest
 from src.monitoring.profiler import PipelineProfiler, StageTimer
@@ -67,7 +68,7 @@ class TestPipelineProfiling:
         query = sample_queries["registration_msa"]
         
         start_time = time.perf_counter()
-        res = engine.process_query(query)
+        res = asyncio.run(engine.process_query(query))
         end_time = time.perf_counter()
         
         elapsed_total_ms = (end_time - start_time) * 1000.0

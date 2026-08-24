@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 from pathlib import Path
 
 # Force UTF-8 encoding on Windows console stdout/stderr
@@ -8,6 +9,11 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+# INFO-level app loggers (e.g. the generator/ticket agents) have no effect until
+# a handler is configured -- uvicorn only configures its own "uvicorn.*" loggers,
+# not the root logger.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security import APIKeyHeader

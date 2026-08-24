@@ -3,6 +3,8 @@ import torch
 from typing import Optional
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from src.config import ARAT5_MODEL_NAME, ENABLE_ARAT5_REWRITER, USE_FP16
+from src.config import MIN_VRAM_GB_REWRITER
+from src.core.gpu_utils import pick_device
 
 
 class AraT5DialectRewriter:
@@ -17,7 +19,7 @@ class AraT5DialectRewriter:
         self.enable = enable
         self.tokenizer = None
         self.model = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = pick_device(MIN_VRAM_GB_REWRITER)
 
     def _lazy_load(self):
         if self.tokenizer is None and self.enable:

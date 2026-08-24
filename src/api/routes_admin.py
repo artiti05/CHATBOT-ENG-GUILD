@@ -1,21 +1,27 @@
 import os
 import shutil
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, BackgroundTasks
 from pydantic import BaseModel
 from src.api.dependencies import verify_admin_key
 from src.kb_ingestor.ingestion import IngestionPipeline
-from src.cache_db.document_registry import DocumentRegistry
+from src.cache_db.document_registry import DocumentRegistry, TicketRegistry
 from src.config import PDFS_DIR, TEXTS_DIR, PARSED_OUTPUT_DIR, NEW_UPLOADS_DIR
 
 router = APIRouter()
 pipeline = IngestionPipeline()
 registry = DocumentRegistry()
+ticket_registry = TicketRegistry()
+
+VALID_TICKET_STATUSES = {"open", "in_progress", "resolved", "closed"}
 
 class ReingestRequest(BaseModel):
     files: List[str]
     reingest_all: bool = False
+
+class TicketStatusUpdate(BaseModel):
+    status: str
 
 def process_file_background(file_path: Path):
     try:
@@ -98,3 +104,28 @@ async def list_files():
         return {"documents": docs, "count": len(docs)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list documents: {e}")
+
+@router.get("/tickets", dependencies=[Depends(verify_admin_key)])
+async def list_tickets(status: Optional[str] = None):
+    try:
+        tickets = ticket_registry.list_tickets(status=status)
+        return {"tickets": tickets, "count": len(tickets)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list tickets: {e}")
+
+@router.get("/tickets/{ticket_id}", dependencies=[Depends(verify_admin_key)])
+async def get_ticket(ticket_id: int):
+    ticket = ticket_registry.get_ticket(ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+    return ticket
+
+@router.post("/tickets/{ticket_id}/status", dependencies=[Depends(verify_admin_key)])
+async def update_ticket_status(ticket_id: int, req: TicketStatusUpdate):
+    if req.status not in VALID_TICKET_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(VALID_TICKET_STATUSES)}")
+    ticket = ticket_registry.get_ticket(ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+    ticket_registry.update_status(ticket_id, req.status)
+    return {"status": "success", "message": f"Ticket #{ticket_id} status updated to '{req.status}'."}
