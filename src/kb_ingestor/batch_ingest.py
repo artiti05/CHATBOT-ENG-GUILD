@@ -28,8 +28,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from src.cache_db.document_registry import DocumentRegistry
-from src.config import (
+from src.cache_db.document_registry import DocumentRegistry  # noqa: E402
+from src.config import (  # noqa: E402
     CHROMA_PERSIST_DIR,
     MARKDOWNS_DIR,
     OUTPUT_DIR,
@@ -40,7 +40,7 @@ from src.config import (
     TEXTS_DIR,
 )
 
-from .ingestion import IngestionPipeline, clean_document_text
+from .ingestion import IngestionPipeline, clean_document_text  # noqa: E402
 
 
 def reset_storage_db():
@@ -265,7 +265,6 @@ def main():
     args = parser.parse_args()
 
     texts_dir_path = Path(args.texts_dir).resolve()
-    markdowns_dir_path = Path(args.markdowns_dir).resolve()
     out_dir_path = Path(args.output_dir).resolve()
     pdfs_dir_path = Path(args.pdfs_dir).resolve()
 

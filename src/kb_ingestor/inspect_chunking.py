@@ -16,9 +16,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from src.config import CHILD_CHUNK_TOKENS, CHUNKING_LOGS_DIR, MARKDOWNS_DIR, OUTPUT_DIR, PARENT_CHUNK_TOKENS, TEXTS_DIR
+from src.config import (  # noqa: E402
+    CHILD_CHUNK_TOKENS,
+    CHUNKING_LOGS_DIR,
+    MARKDOWNS_DIR,
+    OUTPUT_DIR,
+    PARENT_CHUNK_TOKENS,
+    TEXTS_DIR,
+)
 
-from .ingestion import TextChunker, clean_document_text
+from .ingestion import TextChunker, clean_document_text  # noqa: E402
 
 
 def list_available_parsed_files() -> List[Path]:

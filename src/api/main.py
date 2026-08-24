@@ -524,7 +524,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         // Render Bot Placeholder
         const botRow = document.createElement('div');
         botRow.className = 'message-row bot';
-        
+
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
         bubble.setAttribute('dir', 'auto');

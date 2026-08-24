@@ -40,7 +40,7 @@ class DocumentRegistry:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR REPLACE INTO processed_documents 
+                INSERT OR REPLACE INTO processed_documents
                 (source_id, file_name, file_path, source_type, content_hash, total_pages, parsed_md_path, status, last_processed)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
             """, (
@@ -78,6 +78,7 @@ class DocumentRegistry:
 
 class AdminManager:
     def __init__(self):
+        from src.kb_ingestor.ingestion import IngestionPipeline
         self.registry = DocumentRegistry()
         self.pipeline = IngestionPipeline()
 

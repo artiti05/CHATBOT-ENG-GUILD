@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from nltk.stem.isri import ISRIStemmer
 
@@ -88,7 +88,7 @@ class QueryPreprocessor:
 
     def condense_history(self, query: str, history: List[Dict[str, str]] = None) -> str:
         """
-        Uses AraT5 neural multi-turn condensation model (Option 2) to resolve 
+        Uses AraT5 neural multi-turn condensation model (Option 2) to resolve
         conversational history into a standalone MSA query without hardcoded word rules.
         """
         if not history or len(history) == 0:

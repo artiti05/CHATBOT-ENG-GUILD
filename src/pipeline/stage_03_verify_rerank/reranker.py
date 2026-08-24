@@ -1,5 +1,7 @@
+from typing import Any, Dict, List
+
 import torch
-from typing import Any, Dict, List, Optional
+
 from src.config import BGE_RERANKER_MODEL_NAME, DOCUMENT_PRIORITY, USE_FP16
 
 

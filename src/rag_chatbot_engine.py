@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from src.cache_db.semantic_cache import SemanticCache
 from src.monitoring.diagnostic_report import DiagnosticAnalyzer
@@ -55,11 +55,11 @@ class RAGChatbotEngine:
 
         # 2. Language Detection Stage
         with profiler.time_stage("language_detection"):
-            lang_res = self.nlp_pipeline.detect_language(user_query)
+            self.nlp_pipeline.detect_language(user_query)
 
         # 3. Normalization Stage
         with profiler.time_stage("normalization"):
-            norm_text = self.nlp_pipeline.normalize_arabic(user_query)
+            self.nlp_pipeline.normalize_arabic(user_query)
 
         # 4. MSA Conversion & Multi-Representation Stage
         with profiler.time_stage("msa_conversion"):
@@ -67,7 +67,7 @@ class RAGChatbotEngine:
 
         # 5. Intent Stage
         with profiler.time_stage("intent"):
-            intent_res = {"intents": query_obj["intent"], "confidence": query_obj["intent_confidence"]}
+            pass
 
         # 6-9. Dense Vector & Sparse Hybrid Retrieval Stage
         with profiler.time_stage("bm25"):

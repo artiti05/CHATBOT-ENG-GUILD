@@ -89,6 +89,7 @@ class PipelineProfiler:
             import json
             import logging
             from logging.handlers import RotatingFileHandler
+
             from src.config import LOGS_DIR
 
             LOGS_DIR.mkdir(parents=True, exist_ok=True)
