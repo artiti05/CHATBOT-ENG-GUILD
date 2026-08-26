@@ -20,6 +20,6 @@ def verify_admin_key(key: str = Security(api_key_header)):
 def verify_user_key(key: str = Security(api_key_header)):
     if not USER_API_KEY and not ADMIN_API_KEY:
         return key
-    if not key or key in (USER_API_KEY, ADMIN_API_KEY):
+    if key and key in (USER_API_KEY, ADMIN_API_KEY):
         return key
-    return key
+    raise HTTPException(status_code=403, detail="Invalid or missing API key")
