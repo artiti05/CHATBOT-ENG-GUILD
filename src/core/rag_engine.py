@@ -7,7 +7,6 @@ from pathlib import Path
 import asyncio
 
 from src.rag_chatbot_engine import RAGChatbotEngine
-from src.pipeline.stage_05_ticket.ticket_agent import PROMPT_USER_INTENT, PROMPT_LOW_CONFIDENCE
 
 
 def clean_formatting(text: str) -> str:
@@ -28,8 +27,9 @@ class RAGChatbot:
     def cache_agent(self):
         return self.engine.cache
 
-    async def answer_question(self, query: str, history: List[Dict[str, str]] = None, top_k: int = 15, **kwargs) -> Dict[str, Any]:
-        res = await self.engine.process_query(query, history=history)
+    async def answer_question(self, query: str, history: List[Dict[str, str]] = None, top_k: int = 15,
+                               user: Optional[Dict[str, str]] = None, **kwargs) -> Dict[str, Any]:
+        res = await self.engine.process_query(query, history=history, user=user)
         ans = res.get("answer", "")
         if isinstance(ans, (tuple, list)):
             ans = ans[0] if ans else ""
@@ -40,27 +40,21 @@ class RAGChatbot:
             "metadata": res.get("profiling", {})
         }
 
-    async def answer_question_stream(self, query: str, history: List[Dict[str, str]] = None, top_k: int = 15, **kwargs) -> AsyncGenerator[str, None]:
+    async def answer_question_stream(self, query: str, history: List[Dict[str, str]] = None, top_k: int = 15,
+                                      user: Optional[Dict[str, str]] = None, **kwargs) -> AsyncGenerator[str, None]:
         hist = history or []
 
         # NODE 0: Ticket intake intercept (mirrors process_query) -- neither
-        # trigger touches the knowledge base, so it runs before the cache.
-        pending = self.engine.ticket_agent.is_awaiting_contact(hist)
-        if pending:
-            reason, issue_text = pending
-            ticket_id = await asyncio.to_thread(
-                self.engine.ticket_agent.create_ticket, reason, issue_text, query
+        # trigger touches the knowledge base. Identity comes from the caller,
+        # so the ticket files in this same turn -- no contact-collection
+        # round trip.
+        if await self.engine.ticket_agent.detect_intent(query, hist):
+            ticket_id, answer_text = await asyncio.to_thread(
+                self.engine.ticket_agent.escalate, "user_intent", query, hist, user
             )
-            answer_text = self.engine.ticket_agent.build_confirmation(ticket_id)
             yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'cache_hit': False, 'profiling': {}}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'token', 'token': answer_text}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'answer': answer_text, 'text_breakdown': 'Ticket Filed'}, ensure_ascii=False)}\n\n"
-            return
-
-        if await self.engine.ticket_agent.detect_intent(query, hist):
-            yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'cache_hit': False, 'profiling': {}}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'token', 'token': PROMPT_USER_INTENT}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'answer': PROMPT_USER_INTENT, 'text_breakdown': 'Ticket Intent'}, ensure_ascii=False)}\n\n"
             return
 
         cached_res = self.engine.cache.get(query) if not hist else None
@@ -104,6 +98,7 @@ class RAGChatbot:
         yield f"data: {meta_payload}\n\n"
 
         full_answer = ""
+        escalated = False
         if route == "DETERMINISTIC":
             primary_intent = query_obj["intent"][0] if query_obj["intent"] else "MEMBERSHIP"
             tmpl_ans = StructuredAnswerTemplates.get_template_answer(primary_intent)
@@ -126,11 +121,14 @@ class RAGChatbot:
                 gen_out = await self.engine.generator.generate(prompt_str) if prompt_str else ""
                 full_answer = gen_out[0] if isinstance(gen_out, tuple) else gen_out
                 if not full_answer:
-                    full_answer = PROMPT_LOW_CONFIDENCE
+                    _, full_answer = await asyncio.to_thread(
+                        self.engine.ticket_agent.escalate, "low_confidence", query, hist, user
+                    )
+                    escalated = True
                 for token in full_answer:
                     yield f"data: {json.dumps({'type': 'token', 'token': token}, ensure_ascii=False)}\n\n"
 
-        if full_answer and not hist and full_answer != PROMPT_LOW_CONFIDENCE:
+        if full_answer and not hist and not escalated:
             self.engine.cache.put(query, full_answer, reranked_cands[:3])
 
         done_payload = json.dumps({

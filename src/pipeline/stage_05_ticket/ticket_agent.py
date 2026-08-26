@@ -8,35 +8,6 @@ from src.cache_db.document_registry import TicketRegistry
 
 logger = logging.getLogger(__name__)
 
-# Unique substring shared by both contact-request prompts below. Its presence
-# in the last assistant turn is how we detect -- statelessly, using only the
-# history the client already round-trips -- that the current user message is
-# the reply to a contact-info request rather than a new question.
-_CONTACT_REQUEST_ANCHOR = "لإتمام العملية، فضلاً زوّدنا بالمعلومات التالية في رسالة واحدة"
-
-# Only present in the low-confidence variant; used to recover `reason` once
-# _CONTACT_REQUEST_ANCHOR confirms we're mid-flow.
-_LOW_CONFIDENCE_MARK = "للأسف ما لقيت إجابة دقيقة كافية"
-
-PROMPT_USER_INTENT = (
-    "تمام، رح أحوّل طلبك لأحد موظفي النقابة لمتابعته معك مباشرة.\n"
-    f"{_CONTACT_REQUEST_ANCHOR}:\n"
-    "١) الاسم الكامل\n"
-    "٢) رقم الهاتف\n"
-    "٣) الرقم النقابي (إن وجد)\n\n"
-    "وبيتم فتح تذكرة ومتابعتها من قبل الموظف المختص."
-)
-
-PROMPT_LOW_CONFIDENCE = (
-    f"{_LOW_CONFIDENCE_MARK} بخصوص سؤالك ضمن قاعدة المعرفة الحالية.\n"
-    "بقدر أحوّل استفسارك لأحد موظفي النقابة ليتابعه معك مباشرة.\n"
-    f"{_CONTACT_REQUEST_ANCHOR}:\n"
-    "١) الاسم الكامل\n"
-    "٢) رقم الهاتف\n"
-    "٣) الرقم النقابي (إن وجد)\n\n"
-    "وبيتم فتح تذكرة ومتابعتها من قبل الموظف المختص."
-)
-
 # Emergency fallback ONLY -- used when the LLM intent classifier is unreachable
 # (vLLM down/timeout). Deliberately a blunt keyword net: it will misfire on
 # purely informational questions ("what's the complaint procedure?"), which is
@@ -71,24 +42,23 @@ _INTENT_CLASSIFIER_PROMPT_TEMPLATE = (
     "أجب بكلمة واحدة فقط بدون أي شرح أو علامات ترقيم: نعم أو لا."
 )
 
-_PHONE_RE = re.compile(r'(?:\+?962|00962)?0?7[789]\d{7}')
-# NOTE (port fix, not in the Qwen3.6 original): each keyword tolerates an
-# optional definite article, so "الرقم النقابي" -- the exact wording the bot
-# asks for in PROMPT_USER_INTENT -- parses. Previously only the bare
-# "رقم نقابي" form matched and the field was silently dropped.
-_ENGINEER_NO_RE = re.compile(
-    r'(?:رقم\s*(?:ال)?(?:نقابي|نقابة|عضوية|مهندس)|membership\s*(?:no\.?|number)?|eng(?:ineer)?\s*(?:no\.?|number)?)'
-    r'\D{0,6}(\d{2,10})',
-    re.IGNORECASE,
+# Data-correction language bumps an explicit escalation to high priority --
+# same signal the ported-from reference project uses.
+_PRIORITY_BUMP_RE = re.compile(r'خطأ|خطا|تعديل|تحديث', re.IGNORECASE)
+
+_MSG_LOW_CONFIDENCE_APOLOGY = (
+    "للأسف ما لقيت إجابة دقيقة كافية بخصوص سؤالك ضمن قاعدة المعرفة الحالية.\n"
+    "بقدر أحوّل استفسارك لأحد موظفي النقابة ليتابعه معك مباشرة."
 )
-_NAME_RE = re.compile(r'(?:اسمي|الاسم\s*(?:هو)?[:：]?|اسم[:：]|my name is)\s*([^\n,،؛;]+)', re.IGNORECASE)
 
 
 class TicketIntakeAgent:
-    """Detects the two ticket-filing triggers and runs the (stateless,
-    history-driven) contact-info collection exchange. Once a ticket is
-    created, resolution is entirely a human process -- this agent never
-    generates suggestions or follow-up answers for an existing ticket."""
+    """Detects the two ticket-filing triggers (explicit escalation request /
+    low RAG confidence) and files a ticket immediately, using the identity
+    the caller already supplies -- no follow-up turn is needed to collect
+    contact info. Resolution after that point is a purely human process;
+    this agent never generates suggestions or follow-up answers for an
+    existing ticket."""
 
     def __init__(self, vllm_url: str = VLLM_CHAT_URL, model: str = VLLM_CHAT_MODEL):
         self.registry = TicketRegistry()
@@ -141,51 +111,26 @@ class TicketIntakeAgent:
     def _detect_intent_keywords(self, query: str) -> bool:
         return any(p.search(query) for p in _INTENT_FALLBACK_PATTERNS)
 
-    def is_awaiting_contact(self, history: Optional[List[Dict[str, str]]]) -> Optional[Tuple[str, str]]:
-        """If the last assistant turn was a contact-info request, returns
-        (reason, original_issue_text); otherwise None."""
-        if not history:
-            return None
-        last_assistant = next((h for h in reversed(history) if h.get("role") == "assistant"), None)
-        if not last_assistant or _CONTACT_REQUEST_ANCHOR not in last_assistant.get("content", ""):
-            return None
-
-        reason = "low_confidence" if _LOW_CONFIDENCE_MARK in last_assistant["content"] else "user_intent"
-
-        last_assistant_idx = len(history) - 1 - next(
-            i for i, h in enumerate(reversed(history)) if h is last_assistant
+    def escalate(
+        self,
+        reason: str,
+        query: str,
+        history: Optional[List[Dict[str, str]]],
+        user: Optional[Dict[str, str]],
+    ) -> Tuple[int, str]:
+        """Files the ticket and returns (ticket_id, user_facing_message).
+        Synchronous (SQLite) -- call via asyncio.to_thread from async code."""
+        priority = "high" if reason == "user_intent" and _PRIORITY_BUMP_RE.search(query) else "medium"
+        ticket_id = self.registry.create_ticket(
+            reason=reason, query=query, history=history or [], user=user or {}, priority=priority
         )
-        issue_text = ""
-        for h in reversed(history[:last_assistant_idx]):
-            if h.get("role") == "user":
-                issue_text = h.get("content", "")
-                break
+        if reason == "low_confidence":
+            message = f"{_MSG_LOW_CONFIDENCE_APOLOGY}\n\nتم فتح تذكرة متابعة رقم #{ticket_id}."
+        else:
+            message = self._build_confirmation(ticket_id)
+        return ticket_id, message
 
-        return reason, issue_text
-
-    def parse_contact_reply(self, text: str) -> Dict[str, str]:
-        contact = {"name": "", "phone": "", "engineer_number": "", "raw_text": text}
-
-        phone_match = _PHONE_RE.search(text)
-        if phone_match:
-            contact["phone"] = phone_match.group(0)
-
-        eng_match = _ENGINEER_NO_RE.search(text)
-        if eng_match:
-            contact["engineer_number"] = eng_match.group(1)
-
-        name_match = _NAME_RE.search(text)
-        if name_match:
-            contact["name"] = name_match.group(1).strip()
-
-        return contact
-
-    def create_ticket(self, reason: str, issue_text: str, query: str) -> int:
-        """Synchronous (SQLite) -- call via asyncio.to_thread from async code."""
-        contact = self.parse_contact_reply(query)
-        return self.registry.create_ticket(reason, issue_text, contact)
-
-    def build_confirmation(self, ticket_id: int) -> str:
+    def _build_confirmation(self, ticket_id: int) -> str:
         return (
             f"تم فتح تذكرة رقم #{ticket_id} بنجاح، وسيتواصل معك أحد موظفي النقابة قريباً لمتابعة طلبك.\n"
             "شكراً لتواصلك مع النقابة."

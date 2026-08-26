@@ -12,10 +12,17 @@ class ChatMessage(BaseModel):
     role: str
     content: str
 
+class UserContext(BaseModel):
+    user_id: Optional[str] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    engineer_number: Optional[str] = None
+
 class ChatRequest(BaseModel):
     query: str
     history: Optional[List[ChatMessage]] = []
     top_k: int = 15
+    user: Optional[UserContext] = None
 
 class SearchRequest(BaseModel):
     query: str
@@ -49,8 +56,9 @@ async def chat_with_kb(req: Optional[ChatRequest] = None, query: Optional[str] =
     hist_dicts = []
     if req and req.history:
         hist_dicts = [{"role": h.role, "content": h.content} for h in req.history]
-    
-    response = await chatbot.answer_question(query=q, history=hist_dicts, top_k=k)
+    user_dict = req.user.model_dump(exclude_none=True) if req and req.user else None
+
+    response = await chatbot.answer_question(query=q, history=hist_dicts, top_k=k, user=user_dict)
     return response
 
 @router.api_route("/query", methods=["GET", "POST"], dependencies=[Depends(verify_user_key)])
@@ -67,8 +75,9 @@ async def chat_with_kb_stream(req: Optional[ChatRequest] = None, query: Optional
     hist_dicts = []
     if req and req.history:
         hist_dicts = [{"role": h.role, "content": h.content} for h in req.history]
+    user_dict = req.user.model_dump(exclude_none=True) if req and req.user else None
 
     return StreamingResponse(
-        chatbot.answer_question_stream(query=q, history=hist_dicts, top_k=k),
+        chatbot.answer_question_stream(query=q, history=hist_dicts, top_k=k, user=user_dict),
         media_type="text/event-stream"
     )

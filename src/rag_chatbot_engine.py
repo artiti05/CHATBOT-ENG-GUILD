@@ -15,9 +15,7 @@ from src.pipeline.stage_03_verify_rerank.confidence import DeterministicConfiden
 from src.pipeline.stage_04_answer.answer_router import AnswerRouter
 from src.pipeline.stage_04_answer.generator_agent import ResponseGeneratorAgent
 from src.pipeline.stage_02_retrieve.retriever_agent import RetrieverAgent
-from src.pipeline.stage_05_ticket.ticket_agent import (
-    TicketIntakeAgent, PROMPT_USER_INTENT, PROMPT_LOW_CONFIDENCE
-)
+from src.pipeline.stage_05_ticket.ticket_agent import TicketIntakeAgent
 
 
 class RAGChatbotEngine:
@@ -40,22 +38,22 @@ class RAGChatbotEngine:
         self.ticket_agent = TicketIntakeAgent()
 
     async def process_query(self, user_query: str,
-                            history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+                            history: Optional[List[Dict[str, str]]] = None,
+                            user: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         request_id = RequestTracer.generate_request_id()
         profiler = PipelineProfiler(request_id)
         hist = history or []
 
-        # 0. Ticket Intake Stage — runs before cache/retrieval since neither
-        # trigger needs the knowledge base. Resolution after intake is a purely
-        # human process; the AI's only job here is collecting the details.
+        # 0. Ticket Intake Stage — runs before cache/retrieval since this
+        # trigger needs neither. Identity comes from the caller (the backend
+        # already knows the user), so the ticket files in this same turn --
+        # no contact-collection round trip. Resolution after that point is a
+        # purely human process.
         with profiler.time_stage("ticket_intake"):
-            pending = self.ticket_agent.is_awaiting_contact(hist)
-            if pending:
-                reason, issue_text = pending
-                ticket_id = await asyncio.to_thread(
-                    self.ticket_agent.create_ticket, reason, issue_text, user_query
+            if await self.ticket_agent.detect_intent(user_query, hist):
+                ticket_id, answer_text = await asyncio.to_thread(
+                    self.ticket_agent.escalate, "user_intent", user_query, hist, user
                 )
-                answer_text = self.ticket_agent.build_confirmation(ticket_id)
                 report = profiler.generate_report()
                 profiler.write_request_log(user_query, answer_text, cache_hit=False, route="TICKET_FILED")
                 return {
@@ -65,20 +63,6 @@ class RAGChatbotEngine:
                     "sources": [],
                     "cache_hit": False,
                     "route": {"route": "TICKET_FILED", "ticket_id": ticket_id},
-                    "profiling": report,
-                    "text_breakdown": profiler.format_text_breakdown()
-                }
-
-            if await self.ticket_agent.detect_intent(user_query, hist):
-                report = profiler.generate_report()
-                profiler.write_request_log(user_query, PROMPT_USER_INTENT, cache_hit=False, route="TICKET_INTENT")
-                return {
-                    "request_id": request_id,
-                    "query": {"original": user_query},
-                    "answer": PROMPT_USER_INTENT,
-                    "sources": [],
-                    "cache_hit": False,
-                    "route": {"route": "TICKET_INTENT"},
                     "profiling": report,
                     "text_breakdown": profiler.format_text_breakdown()
                 }
@@ -137,6 +121,7 @@ class RAGChatbotEngine:
             conf_res = self.confidence_eval.evaluate(reranked_cands, query_obj)
 
         # 12. Answer Routing & Synthesis Stage
+        escalated = False
         with profiler.time_stage("answer"):
             route_res = self.router.route(query_obj, conf_res)
             route = route_res["route"]
@@ -152,18 +137,23 @@ class RAGChatbotEngine:
                     sources=reranked_cands,
                     detected_accent=query_obj["language"]
                 )
+                answer_text = None
                 if prompt_str:
                     gen_out = await self.generator.generate(prompt_str)
                     answer_text = gen_out[0] if isinstance(gen_out, tuple) else gen_out
-                    # No grounded answer -> offer human escalation rather than a dead end.
-                    if not answer_text:
-                        answer_text = PROMPT_LOW_CONFIDENCE
-                else:
-                    answer_text = PROMPT_LOW_CONFIDENCE
 
-        # Cache final answer if valid (single-turn only, and never the
-        # escalation prompt -- it is conversational state, not an answer)
-        if answer_text and not hist and answer_text != PROMPT_LOW_CONFIDENCE:
+                # No grounded answer -> escalate to a human ticket, in this
+                # same turn, rather than a dead end.
+                if not answer_text:
+                    ticket_id, answer_text = await asyncio.to_thread(
+                        self.ticket_agent.escalate, "low_confidence", user_query, hist, user
+                    )
+                    escalated = True
+                    route_res = {**route_res, "ticket_id": ticket_id}
+
+        # Cache final answer if valid (single-turn only; never cache an
+        # escalation reply -- it embeds a one-off ticket number)
+        if answer_text and not hist and not escalated:
             self.cache.put(user_query, answer_text, reranked_cands[:3])
 
         profiler.record_stage("answer", profiler.stage_latencies["answer"], {"route": route})
@@ -175,7 +165,7 @@ class RAGChatbotEngine:
             "request_id": request_id,
             "query": query_obj,
             "answer": answer_text,
-            "sources": reranked_cands[:5],
+            "sources": [] if escalated else reranked_cands[:5],
             "confidence": conf_res,
             "route": route_res,
             "cache_hit": False,

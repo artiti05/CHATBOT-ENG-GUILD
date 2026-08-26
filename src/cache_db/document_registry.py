@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import hashlib
+import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from src.config import REGISTRY_DB_PATH, STORAGE_DIR, CRAWL_CACHE_DIR
@@ -123,21 +124,43 @@ class TicketRegistry:
                     status TEXT DEFAULT 'open'
                 );
             """)
+            for ddl in (
+                "ALTER TABLE tickets ADD COLUMN title TEXT DEFAULT '';",
+                "ALTER TABLE tickets ADD COLUMN priority TEXT DEFAULT 'medium';",
+                "ALTER TABLE tickets ADD COLUMN conversation_context TEXT DEFAULT '';",
+                "ALTER TABLE tickets ADD COLUMN user_id TEXT DEFAULT '';",
+            ):
+                try:
+                    cursor.execute(ddl)
+                except Exception:
+                    pass
             conn.commit()
 
-    def create_ticket(self, reason: str, issue_text: str, contact: Dict[str, str]) -> int:
+    def create_ticket(
+        self,
+        reason: str,
+        query: str,
+        history: List[Dict[str, str]],
+        user: Dict[str, str],
+        priority: str = "medium",
+    ) -> int:
+        title = query[:40] + ("..." if len(query) > 40 else "")
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO tickets (reason, issue_text, name, phone, engineer_number, raw_contact_text, status)
-                VALUES (?, ?, ?, ?, ?, ?, 'open');
+                INSERT INTO tickets
+                    (reason, issue_text, name, phone, engineer_number, status, title, priority, conversation_context, user_id)
+                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?);
             """, (
                 reason,
-                issue_text,
-                contact.get("name", ""),
-                contact.get("phone", ""),
-                contact.get("engineer_number", ""),
-                contact.get("raw_text", ""),
+                query,
+                user.get("name", ""),
+                user.get("phone", ""),
+                user.get("engineer_number", ""),
+                title,
+                priority,
+                json.dumps(history, ensure_ascii=False),
+                user.get("user_id", ""),
             ))
             conn.commit()
             return cursor.lastrowid
