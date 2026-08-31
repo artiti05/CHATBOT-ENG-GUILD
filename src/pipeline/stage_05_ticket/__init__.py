@@ -6,5 +6,7 @@ immediately, using the caller-supplied user identity. Resolution after
 that point is a purely human process.
 """
 from .ticket_agent import TicketIntakeAgent
+from .ticketing_client import TicketingClient
 
-__all__ = ["TicketIntakeAgent"]
+__all__ = ["TicketIntakeAgent", "TicketingClient"]
+

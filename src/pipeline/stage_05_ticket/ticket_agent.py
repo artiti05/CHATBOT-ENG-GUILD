@@ -10,8 +10,10 @@ from src.config import (
     INTERNAL_TICKETS_API_KEY,
 )
 from src.cache_db.document_registry import TicketRegistry
+from src.pipeline.stage_05_ticket.ticketing_client import TicketingClient
 
 logger = logging.getLogger(__name__)
+
 
 # Emergency fallback ONLY -- used when the LLM intent classifier is unreachable
 # (vLLM down/timeout). Deliberately a blunt keyword net: it will misfire on
@@ -78,6 +80,10 @@ class TicketIntakeAgent:
         self.model = model
         self.internal_tickets_url = internal_tickets_url
         self.internal_tickets_key = internal_tickets_key
+        self.ticketing_client = TicketingClient(
+            base_url=internal_tickets_url,
+            token=internal_tickets_key,
+        )
         self._client: Optional[httpx.Client] = None
 
     def _get_http_client(self) -> httpx.Client:
@@ -87,6 +93,7 @@ class TicketIntakeAgent:
                 limits=httpx.Limits(max_keepalive_connections=15, max_connections=50),
             )
         return self._client
+
 
     async def detect_intent(self, query: str, history: Optional[List[Dict[str, str]]] = None) -> bool:
         """Semantic escalation-intent classifier -- judges what the user MEANS
@@ -184,6 +191,17 @@ class TicketIntakeAgent:
         phone = (user or {}).get("phone") or (user or {}).get("userPhoneNumber") or (user or {}).get("user_phone_number")
         if phone:
             payload["userPhoneNumber"] = str(phone).strip()
+
+        # Dynamic category resolution: swap to designated AI category if present
+        try:
+            category_id = self.ticketing_client.get_target_category_id(
+                intent="escalation", force_ai_swap=True
+            )
+            if category_id:
+                payload["serviceCategoryId"] = category_id
+        except Exception as e:
+            logger.debug("[TicketAgent] Category resolution for AI swap failed: %s", e)
+
 
         try:
             client = self._get_http_client()
