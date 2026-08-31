@@ -1,7 +1,10 @@
 import re
 from typing import Any, Dict, List
 
-from nltk.stem.isri import ISRIStemmer
+try:
+    from nltk.stem.isri import ISRIStemmer
+except (ImportError, ModuleNotFoundError):
+    ISRIStemmer = None
 
 from src.pipeline.stage_01_understand.arat5_rewriter import AraT5DialectRewriter
 

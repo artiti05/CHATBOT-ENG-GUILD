@@ -22,6 +22,9 @@ data/new_uploads/
 data/logs/
 models/
 araT5/models/
+araT5/tuning/trial_checkpoints/
+araT5/tuning/best_model/
+araT5/tuning/logs/
 *.log
 *.pkl
 *.db

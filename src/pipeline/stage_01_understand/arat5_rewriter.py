@@ -1,7 +1,12 @@
+import os
+
+# Prevent Intel OMP library duplication crash on Windows
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from src.config import ARAT5_MODEL_NAME, ENABLE_ARAT5_REWRITER
+from src.config import ARAT5_DEVICE, ARAT5_MODEL_NAME, ENABLE_ARAT5_REWRITER
 
 TASK_PREFIX = "حول إلى الفصحى: "
 MULTITURN_PREFIX = "دمج المحادثة: "
@@ -9,7 +14,7 @@ MULTITURN_PREFIX = "دمج المحادثة: "
 
 class AraT5DialectRewriter:
     """
-    GPU-Accelerated Neural Dialect-to-MSA Rewriter & Multi-Turn Query Condensation Layer using fine-tuned AraT5.
+    Neural Dialect-to-MSA Rewriter & Multi-Turn Query Condensation Layer using fine-tuned AraT5.
     Translates Jordanian / Levantine dialectal Arabic into formal Modern Standard Arabic (MSA)
     and condenses conversational history into standalone search queries.
     """
@@ -19,7 +24,8 @@ class AraT5DialectRewriter:
         self.enable = enable
         self.tokenizer = None
         self.model = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        dev_req = str(ARAT5_DEVICE).lower()
+        self.device = "cuda" if (dev_req == "cuda" and torch.cuda.is_available()) else "cpu"
 
     def _lazy_load(self):
         if self.tokenizer is None and self.enable:

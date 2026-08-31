@@ -59,6 +59,13 @@ DEFAULT_ARAT5_MODEL = str(LOCAL_ARAT5_PATH) if LOCAL_ARAT5_PATH.exists() else "U
 ARAT5_MODEL_NAME = os.getenv("ARAT5_MODEL_NAME", DEFAULT_ARAT5_MODEL)
 USE_FP16 = True
 
+# Device execution controls for hybrid CPU/GPU allocation
+# Hybrid Mode (Recommended for 8GB GPU): Reranker on GPU (CUDA), Embedder on CPU, AraT5 on CPU
+# All-on-CPU Mode: Set RERANKER_DEVICE="cpu", EMBEDDER_DEVICE="cpu", ARAT5_DEVICE="cpu"
+RERANKER_DEVICE = os.getenv("RERANKER_DEVICE", "cuda")
+EMBEDDER_DEVICE = os.getenv("EMBEDDER_DEVICE", "cpu")
+ARAT5_DEVICE = os.getenv("ARAT5_DEVICE", "cpu")
+
 # Reranker score threshold — chunks below raw logit 0.0 (sigmoid 50%) are strictly discarded
 RERANK_THRESHOLD    = 0.0   # raw logit floor (50% match) — anything below is dropped BEFORE boost
 RELEVANCE_THRESHOLD = 40    # Minimum similarity percentage (40%) to include chunk in LLM context

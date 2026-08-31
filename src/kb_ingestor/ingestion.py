@@ -34,6 +34,7 @@ from src.config import (
     CHROMA_PERSIST_DIR,
     CLAHE_CLIP_LIMIT,
     CLAHE_TILE_GRID,
+    EMBEDDER_DEVICE,
     MARKDOWNS_DIR,
     MIN_TABLE_AREA_FRACTION,
     NUM_CTX,
@@ -445,9 +446,13 @@ class BGEM3Embedder:
     def _load_model(self):
         if HAS_BGEM3:
             try:
-                print(f"[Embedder] Loading BGE-M3 model '{BGE_M3_MODEL_NAME}'...")
-                self.model = BGEM3FlagModel(BGE_M3_MODEL_NAME, use_fp16=USE_FP16)
-                print("[Embedder] Successfully loaded BGE-M3 model.")
+                import torch
+                dev_req = str(EMBEDDER_DEVICE).lower()
+                device_val = "cuda" if (dev_req == "cuda" and torch.cuda.is_available()) else "cpu"
+                use_fp16_val = USE_FP16 if device_val == "cuda" else False
+                print(f"[Embedder] Loading BGE-M3 model '{BGE_M3_MODEL_NAME}' on {device_val.upper()}...")
+                self.model = BGEM3FlagModel(BGE_M3_MODEL_NAME, use_fp16=use_fp16_val, devices=device_val)
+                print(f"[Embedder] Successfully loaded BGE-M3 model on {device_val.upper()}.")
             except Exception as e:
                 print(f"[Embedder Error] Could not load BGE-M3 model: {e}")
                 raise RuntimeError(f"Failed to initialize embedding model: {e}") from e

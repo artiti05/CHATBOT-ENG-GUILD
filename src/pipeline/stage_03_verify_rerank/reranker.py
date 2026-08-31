@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 
 import torch
 
-from src.config import BGE_RERANKER_MODEL_NAME, DOCUMENT_PRIORITY, USE_FP16
+from src.config import BGE_RERANKER_MODEL_NAME, DOCUMENT_PRIORITY, RERANKER_DEVICE, USE_FP16
 
 
 class PriorityReranker:
@@ -15,15 +15,17 @@ class PriorityReranker:
         self.model_name = model_name
         self.priority_map = priority_map
         self.reranker_model = None
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        dev_req = str(RERANKER_DEVICE).lower()
+        self._device = "cuda" if (dev_req == "cuda" and torch.cuda.is_available()) else "cpu"
 
     def _lazy_load(self):
         if self.reranker_model is None:
             try:
                 from FlagEmbedding import FlagReranker
                 print(f"[Reranker] Loading Cross-Encoder model '{self.model_name}' on {self._device.upper()}...")
-                self.reranker_model = FlagReranker(self.model_name, use_fp16=USE_FP16)
-                print(f"[Reranker] Successfully loaded Cross-Encoder '{self.model_name}'.")
+                use_fp16_val = USE_FP16 if self._device == "cuda" else False
+                self.reranker_model = FlagReranker(self.model_name, use_fp16=use_fp16_val, devices=self._device)
+                print(f"[Reranker] Successfully loaded Cross-Encoder '{self.model_name}' on {self._device.upper()}.")
             except Exception as e:
                 print(f"[Reranker Warning] Could not load FlagReranker '{self.model_name}': {e}. Using RRF rank fallback.")
                 self.reranker_model = False
