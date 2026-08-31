@@ -105,6 +105,42 @@ async def list_files():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list documents: {e}")
 
+class CreateTicketRequest(BaseModel):
+    reason: str
+    query: str
+    name: Optional[str] = ""
+    phone: Optional[str] = ""
+    engineer_number: Optional[str] = ""
+    user_id: Optional[str] = ""
+    session_id: Optional[str] = ""
+    priority: Optional[str] = "medium"
+    history: Optional[List[dict]] = []
+
+@router.post("/tickets", dependencies=[Depends(verify_admin_key)], status_code=201)
+async def create_ticket(req: CreateTicketRequest):
+    try:
+        ticket_id = ticket_registry.create_ticket(
+            reason=req.reason,
+            query=req.query,
+            history=req.history or [],
+            user={
+                "name": req.name or "",
+                "phone": req.phone or "",
+                "engineer_number": req.engineer_number or "",
+                "user_id": req.user_id or "",
+            },
+            priority=req.priority or "medium",
+            session_id=req.session_id or "",
+        )
+        return {
+            "status": "success",
+            "ticket_id": ticket_id,
+            "id": ticket_id,
+            "message": f"Ticket #{ticket_id} created successfully."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create ticket: {e}")
+
 @router.get("/tickets", dependencies=[Depends(verify_admin_key)])
 async def list_tickets(status: Optional[str] = None):
     try:
@@ -129,3 +165,4 @@ async def update_ticket_status(ticket_id: int, req: TicketStatusUpdate):
         raise HTTPException(status_code=404, detail="Ticket not found.")
     ticket_registry.update_status(ticket_id, req.status)
     return {"status": "success", "message": f"Ticket #{ticket_id} status updated to '{req.status}'."}
+

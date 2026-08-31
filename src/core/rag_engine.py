@@ -28,20 +28,30 @@ class RAGChatbot:
         return self.engine.cache
 
     async def answer_question(self, query: str, history: List[Dict[str, str]] = None, top_k: int = 15,
-                               user: Optional[Dict[str, str]] = None, **kwargs) -> Dict[str, Any]:
-        res = await self.engine.process_query(query, history=history, user=user)
+                               user: Optional[Dict[str, str]] = None, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        res = await self.engine.process_query(query, history=history, user=user, session_id=session_id)
         ans = res.get("answer", "")
         if isinstance(ans, (tuple, list)):
             ans = ans[0] if ans else ""
+        
+        is_escalated = res.get("is_escalated", False) or res.get("escalated", False)
+        ticket_id = res.get("ticket_id")
+        escalation_reason = res.get("escalation_reason")
+
         return {
             "answer": ans,
-            "sources": res["sources"][:top_k],
+            "sources": res.get("sources", [])[:top_k],
             "cache_hit": res.get("cache_hit", False),
+            "escalated": is_escalated,
+            "is_escalated": is_escalated,
+            "ticket_id": ticket_id,
+            "escalation_reason": escalation_reason,
+            "session_id": session_id,
             "metadata": res.get("profiling", {})
         }
 
     async def answer_question_stream(self, query: str, history: List[Dict[str, str]] = None, top_k: int = 15,
-                                      user: Optional[Dict[str, str]] = None, **kwargs) -> AsyncGenerator[str, None]:
+                                      user: Optional[Dict[str, str]] = None, session_id: Optional[str] = None, **kwargs) -> AsyncGenerator[str, None]:
         hist = history or []
 
         # NODE 0: Ticket intake intercept (mirrors process_query) -- neither
@@ -50,11 +60,11 @@ class RAGChatbot:
         # round trip.
         if await self.engine.ticket_agent.detect_intent(query, hist):
             ticket_id, answer_text = await asyncio.to_thread(
-                self.engine.ticket_agent.escalate, "user_intent", query, hist, user
+                self.engine.ticket_agent.escalate, "user_intent", query, hist, user, session_id
             )
-            yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'cache_hit': False, 'profiling': {}}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'cache_hit': False, 'escalated': True, 'is_escalated': True, 'ticket_id': ticket_id, 'escalation_reason': 'user_intent', 'session_id': session_id, 'profiling': {}}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'token', 'token': answer_text}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'answer': answer_text, 'text_breakdown': 'Ticket Filed'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'answer': answer_text, 'escalated': True, 'is_escalated': True, 'ticket_id': ticket_id, 'escalation_reason': 'user_intent', 'session_id': session_id, 'text_breakdown': 'Ticket Filed'}, ensure_ascii=False)}\n\n"
             return
 
         cached_res = self.engine.cache.get(query) if not hist else None
@@ -66,6 +76,11 @@ class RAGChatbot:
                 "type": "meta",
                 "sources": cached_res.get("sources", [])[:top_k],
                 "cache_hit": True,
+                "escalated": False,
+                "is_escalated": False,
+                "ticket_id": None,
+                "escalation_reason": None,
+                "session_id": session_id,
                 "profiling": {}
             }, ensure_ascii=False)
             yield f"data: {meta_payload}\n\n"
@@ -77,6 +92,11 @@ class RAGChatbot:
             done_payload = json.dumps({
                 "type": "done",
                 "answer": ans,
+                "escalated": False,
+                "is_escalated": False,
+                "ticket_id": None,
+                "escalation_reason": None,
+                "session_id": session_id,
                 "text_breakdown": "Cache Hit"
             }, ensure_ascii=False)
             yield f"data: {done_payload}\n\n"
@@ -93,12 +113,19 @@ class RAGChatbot:
             "type": "meta",
             "sources": reranked_cands[:top_k],
             "cache_hit": False,
+            "escalated": False,
+            "is_escalated": False,
+            "ticket_id": None,
+            "escalation_reason": None,
+            "session_id": session_id,
             "profiling": {}
         }, ensure_ascii=False)
         yield f"data: {meta_payload}\n\n"
 
         full_answer = ""
         escalated = False
+        escalated_ticket_id = None
+        escalation_reason = None
         if route == "DETERMINISTIC":
             primary_intent = query_obj["intent"][0] if query_obj["intent"] else "MEMBERSHIP"
             tmpl_ans = StructuredAnswerTemplates.get_template_answer(primary_intent)
@@ -121,10 +148,11 @@ class RAGChatbot:
                 gen_out = await self.engine.generator.generate(prompt_str) if prompt_str else ""
                 full_answer = gen_out[0] if isinstance(gen_out, tuple) else gen_out
                 if not full_answer:
-                    _, full_answer = await asyncio.to_thread(
-                        self.engine.ticket_agent.escalate, "low_confidence", query, hist, user
+                    escalated_ticket_id, full_answer = await asyncio.to_thread(
+                        self.engine.ticket_agent.escalate, "low_confidence", query, hist, user, session_id
                     )
                     escalated = True
+                    escalation_reason = "low_confidence"
                 for token in full_answer:
                     yield f"data: {json.dumps({'type': 'token', 'token': token}, ensure_ascii=False)}\n\n"
 
@@ -134,6 +162,11 @@ class RAGChatbot:
         done_payload = json.dumps({
             "type": "done",
             "answer": full_answer,
+            "escalated": escalated,
+            "is_escalated": escalated,
+            "ticket_id": escalated_ticket_id if escalated else None,
+            "escalation_reason": escalation_reason if escalated else None,
+            "session_id": session_id,
             "text_breakdown": ""
         }, ensure_ascii=False)
         yield f"data: {done_payload}\n\n"

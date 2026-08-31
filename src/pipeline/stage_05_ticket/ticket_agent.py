@@ -3,7 +3,12 @@ import logging
 import httpx
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.config import VLLM_CHAT_URL, VLLM_CHAT_MODEL
+from src.config import (
+    VLLM_CHAT_URL,
+    VLLM_CHAT_MODEL,
+    INTERNAL_TICKETS_API_URL,
+    INTERNAL_TICKETS_API_KEY,
+)
 from src.cache_db.document_registry import TicketRegistry
 
 logger = logging.getLogger(__name__)
@@ -45,6 +50,7 @@ _INTENT_CLASSIFIER_PROMPT_TEMPLATE = (
 # Data-correction language bumps an explicit escalation to high priority --
 # same signal the ported-from reference project uses.
 _PRIORITY_BUMP_RE = re.compile(r'خطأ|خطا|تعديل|تحديث', re.IGNORECASE)
+_UUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 
 _MSG_LOW_CONFIDENCE_APOLOGY = (
     "للأسف ما لقيت إجابة دقيقة كافية بخصوص سؤالك ضمن قاعدة المعرفة الحالية.\n"
@@ -60,10 +66,27 @@ class TicketIntakeAgent:
     this agent never generates suggestions or follow-up answers for an
     existing ticket."""
 
-    def __init__(self, vllm_url: str = VLLM_CHAT_URL, model: str = VLLM_CHAT_MODEL):
+    def __init__(
+        self,
+        vllm_url: str = VLLM_CHAT_URL,
+        model: str = VLLM_CHAT_MODEL,
+        internal_tickets_url: str = INTERNAL_TICKETS_API_URL,
+        internal_tickets_key: str = INTERNAL_TICKETS_API_KEY,
+    ):
         self.registry = TicketRegistry()
         self.vllm_url = vllm_url
         self.model = model
+        self.internal_tickets_url = internal_tickets_url
+        self.internal_tickets_key = internal_tickets_key
+        self._client: Optional[httpx.Client] = None
+
+    def _get_http_client(self) -> httpx.Client:
+        if self._client is None or getattr(self._client, "is_closed", False):
+            self._client = httpx.Client(
+                timeout=httpx.Timeout(4.0, connect=1.5),
+                limits=httpx.Limits(max_keepalive_connections=15, max_connections=50),
+            )
+        return self._client
 
     async def detect_intent(self, query: str, history: Optional[List[Dict[str, str]]] = None) -> bool:
         """Semantic escalation-intent classifier -- judges what the user MEANS
@@ -111,27 +134,118 @@ class TicketIntakeAgent:
     def _detect_intent_keywords(self, query: str) -> bool:
         return any(p.search(query) for p in _INTENT_FALLBACK_PATTERNS)
 
+    def _post_to_internal_ticket_api(
+        self,
+        reason: str,
+        query: str,
+        history: Optional[List[Dict[str, str]]],
+        user: Optional[Dict[str, str]],
+        priority: str,
+        session_id: Optional[str] = None,
+    ) -> Optional[Any]:
+        """Optionally post ticket directly to jea_backend POST /api/v1/tickets/internal."""
+        if not self.internal_tickets_url:
+            return None
+
+        # Headers matching jea_backend tickets.controller.ts:130 (x-internal-token)
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "x-internal-token": self.internal_tickets_key or "jea_rag_token",
+        }
+        if self.internal_tickets_key:
+            headers["X-API-Key"] = self.internal_tickets_key
+
+        # Payload matching jea_backend CreateTicketDto
+        ticket_priority = "HIGH" if priority.lower() == "high" else "MEDIUM"
+        title = (query[:50] + "...") if len(query) > 50 else query
+
+        history_summary = ""
+        if history:
+            history_summary = "\n\nسياق المحادثة:\n" + "\n".join(
+                f"{h.get('role', 'msg')}: {h.get('content', '')}" for h in history[-3:]
+            )
+
+        content = f"استفسار/شكوى المستخدم عبر الشات بوت:\n{query}\n\nسبب التصعيد: {reason}{history_summary}"
+
+        payload: Dict[str, Any] = {
+            "title": title,
+            "content": content,
+            "reason": reason,
+            "ticketPriority": ticket_priority,
+            "skipWorkingHoursCheck": True,
+        }
+
+        if session_id:
+            payload["session_id"] = session_id
+            if _UUID_RE.match(session_id.strip()):
+                payload["sessionId"] = session_id.strip()
+
+        phone = (user or {}).get("phone") or (user or {}).get("userPhoneNumber") or (user or {}).get("user_phone_number")
+        if phone:
+            payload["userPhoneNumber"] = str(phone).strip()
+
+        try:
+            client = self._get_http_client()
+            res = client.post(self.internal_tickets_url, json=payload, headers=headers)
+            if res.status_code in (200, 201):
+                data = res.json()
+                ticket_id = data.get("id") or data.get("ticket_id")
+                if isinstance(data.get("data"), dict):
+                    ticket_id = ticket_id or data["data"].get("id") or data["data"].get("ticket_id")
+                if ticket_id is not None:
+                    logger.info("[TicketAgent] Successfully filed ticket via jea_backend internal API: #%s", ticket_id)
+                    return ticket_id
+            logger.warning("[TicketAgent] Internal ticket API returned %s: %s", res.status_code, res.text[:200])
+        except Exception as e:
+            logger.warning("[TicketAgent] Internal ticket API call failed: %s. Falling back to local storage.", e)
+        return None
+
     def escalate(
         self,
         reason: str,
         query: str,
         history: Optional[List[Dict[str, str]]],
         user: Optional[Dict[str, str]],
-    ) -> Tuple[int, str]:
+        session_id: Optional[str] = None,
+    ) -> Tuple[Any, str]:
         """Files the ticket and returns (ticket_id, user_facing_message).
-        Synchronous (SQLite) -- call via asyncio.to_thread from async code."""
+        Synchronous (SQLite + optional jea_backend internal API) -- call via asyncio.to_thread from async code."""
         priority = "high" if reason == "user_intent" and _PRIORITY_BUMP_RE.search(query) else "medium"
-        ticket_id = self.registry.create_ticket(
-            reason=reason, query=query, history=history or [], user=user or {}, priority=priority
+
+        # 1. Try jea_backend internal API if configured
+        internal_ticket_id = self._post_to_internal_ticket_api(
+            reason=reason,
+            query=query,
+            history=history,
+            user=user,
+            priority=priority,
+            session_id=session_id,
         )
+
+        # 2. Always persist locally in SQLite registry for audit & offline fallback
+        local_ticket_id = self.registry.create_ticket(
+            reason=reason,
+            query=query,
+            history=history or [],
+            user=user or {},
+            priority=priority,
+            session_id=session_id,
+            external_ticket_id=str(internal_ticket_id) if internal_ticket_id else "",
+        )
+
+        # 3. Use internal ticket ID if available, otherwise local SQLite ID
+        ticket_id = internal_ticket_id if internal_ticket_id is not None else local_ticket_id
+        ticket_display = str(ticket_id)[:8] if len(str(ticket_id)) > 8 else str(ticket_id)
+
         if reason == "low_confidence":
-            message = f"{_MSG_LOW_CONFIDENCE_APOLOGY}\n\nتم فتح تذكرة متابعة رقم #{ticket_id}."
+            message = f"{_MSG_LOW_CONFIDENCE_APOLOGY}\n\nتم فتح تذكرة متابعة رقم #{ticket_display}."
         else:
-            message = self._build_confirmation(ticket_id)
+            message = self._build_confirmation(ticket_display)
         return ticket_id, message
 
-    def _build_confirmation(self, ticket_id: int) -> str:
+    def _build_confirmation(self, ticket_display: Any) -> str:
         return (
-            f"تم فتح تذكرة رقم #{ticket_id} بنجاح، وسيتواصل معك أحد موظفي النقابة قريباً لمتابعة طلبك.\n"
+            f"تم فتح تذكرة رقم #{ticket_display} بنجاح، وسيتواصل معك أحد موظفي النقابة قريباً لمتابعة طلبك.\n"
             "شكراً لتواصلك مع النقابة."
         )

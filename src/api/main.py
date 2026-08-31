@@ -22,8 +22,10 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
+from fastapi.middleware.gzip import GZipMiddleware
 from src.core.rag_engine import KnowledgeRetriever
 from src.cache_db.document_registry import DocumentRegistry
+from src.api.security import SecurityHeadersMiddleware, InMemoryRateLimiterMiddleware
 from .routes_chat import router as chat_router
 from .routes_admin import router as admin_router
 from .routes_admin_ui import router as admin_ui_router
@@ -31,11 +33,19 @@ from .dependencies import USER_API_KEY, ADMIN_API_KEY
 
 app = FastAPI(title="Guild Knowledge Base RAG Chatbot UI", version="3.0.0")
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(
+    InMemoryRateLimiterMiddleware,
+    max_requests=int(os.getenv("RATE_LIMIT_PER_MINUTE", "120")),
+    window_seconds=60,
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else ["*"],
-    allow_methods=["POST", "GET", "DELETE"],
-    allow_headers=["X-API-Key", "Content-Type"],
+    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()],
+    allow_methods=["POST", "GET", "DELETE", "OPTIONS"],
+    allow_headers=["X-API-Key", "Content-Type", "Authorization", "x-internal-token", "X-Request-ID"],
+    expose_headers=["X-Request-ID", "X-Process-Time"],
 )
 
 app.include_router(chat_router, prefix="/api")
@@ -45,6 +55,37 @@ app.include_router(admin_ui_router)
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
     return Response(status_code=204)
+
+@app.get("/api/health/live")
+def health_live():
+    return {"status": "alive"}
+
+@app.get("/api/health/ready")
+async def health_ready():
+    checks = {}
+    try:
+        registry = DocumentRegistry()
+        with registry._get_connection() as conn:
+            conn.execute("SELECT 1;")
+        checks["sqlite"] = "healthy"
+    except Exception as e:
+        checks["sqlite"] = f"unhealthy: {e}"
+
+    try:
+        retriever = KnowledgeRetriever()
+        chunk_count = retriever.collection.count()
+        checks["vector_store"] = f"healthy ({chunk_count} chunks)"
+    except Exception as e:
+        checks["vector_store"] = f"unhealthy: {e}"
+
+    is_healthy = all("unhealthy" not in v for v in checks.values())
+    status_code = 200 if is_healthy else 503
+    import json
+    return Response(
+        content=json.dumps({"status": "ready" if is_healthy else "degraded", "checks": checks}),
+        status_code=status_code,
+        media_type="application/json",
+    )
 
 @app.get("/api/health")
 async def health():

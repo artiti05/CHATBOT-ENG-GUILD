@@ -39,7 +39,8 @@ class RAGChatbotEngine:
 
     async def process_query(self, user_query: str,
                             history: Optional[List[Dict[str, str]]] = None,
-                            user: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                            user: Optional[Dict[str, str]] = None,
+                            session_id: Optional[str] = None) -> Dict[str, Any]:
         request_id = RequestTracer.generate_request_id()
         profiler = PipelineProfiler(request_id)
         hist = history or []
@@ -52,7 +53,7 @@ class RAGChatbotEngine:
         with profiler.time_stage("ticket_intake"):
             if await self.ticket_agent.detect_intent(user_query, hist):
                 ticket_id, answer_text = await asyncio.to_thread(
-                    self.ticket_agent.escalate, "user_intent", user_query, hist, user
+                    self.ticket_agent.escalate, "user_intent", user_query, hist, user, session_id
                 )
                 report = profiler.generate_report()
                 profiler.write_request_log(user_query, answer_text, cache_hit=False, route="TICKET_FILED")
@@ -62,7 +63,12 @@ class RAGChatbotEngine:
                     "answer": answer_text,
                     "sources": [],
                     "cache_hit": False,
-                    "route": {"route": "TICKET_FILED", "ticket_id": ticket_id},
+                    "route": {"route": "TICKET_FILED", "ticket_id": ticket_id, "escalation_reason": "user_intent"},
+                    "escalated": True,
+                    "is_escalated": True,
+                    "ticket_id": ticket_id,
+                    "escalation_reason": "user_intent",
+                    "session_id": session_id,
                     "profiling": report,
                     "text_breakdown": profiler.format_text_breakdown()
                 }
@@ -79,6 +85,11 @@ class RAGChatbotEngine:
                     "answer": cached_res["answer"],
                     "sources": cached_res.get("sources", []),
                     "cache_hit": True,
+                    "escalated": False,
+                    "is_escalated": False,
+                    "ticket_id": None,
+                    "escalation_reason": None,
+                    "session_id": session_id,
                     "profiling": report,
                     "text_breakdown": profiler.format_text_breakdown()
                 }
@@ -146,10 +157,10 @@ class RAGChatbotEngine:
                 # same turn, rather than a dead end.
                 if not answer_text:
                     ticket_id, answer_text = await asyncio.to_thread(
-                        self.ticket_agent.escalate, "low_confidence", user_query, hist, user
+                        self.ticket_agent.escalate, "low_confidence", user_query, hist, user, session_id
                     )
                     escalated = True
-                    route_res = {**route_res, "ticket_id": ticket_id}
+                    route_res = {**route_res, "ticket_id": ticket_id, "escalation_reason": "low_confidence"}
 
         # Cache final answer if valid (single-turn only; never cache an
         # escalation reply -- it embeds a one-off ticket number)
@@ -169,6 +180,11 @@ class RAGChatbotEngine:
             "confidence": conf_res,
             "route": route_res,
             "cache_hit": False,
+            "escalated": escalated,
+            "is_escalated": escalated,
+            "ticket_id": route_res.get("ticket_id") if escalated else None,
+            "escalation_reason": route_res.get("escalation_reason") if escalated else None,
+            "session_id": session_id,
             "profiling": report,
             "diagnostics": diagnostics,
             "text_breakdown": profiler.format_text_breakdown()

@@ -114,6 +114,21 @@ VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8001")
 VLLM_CHAT_URL = os.getenv("VLLM_CHAT_URL", f"{VLLM_BASE_URL}/v1/chat/completions")
 VLLM_CHAT_MODEL = os.getenv("VLLM_CHAT_MODEL", "jea-chat")   # must match --served-model-name
 
+# Internal Backend Ticketing API settings (aligned with jea_backend /api/v1/tickets/internal)
+JEA_BACKEND_BASE_URL = os.getenv("JEA_BACKEND_URL", os.getenv("INTERNAL_TICKETS_API_URL", "http://localhost:3000"))
+INTERNAL_BYPASS_TOKEN = os.getenv("INTERNAL_BYPASS_TOKEN", os.getenv("INTERNAL_TICKETS_API_KEY", "jea_rag_token"))
+
+def _resolve_internal_tickets_url() -> str:
+    base = JEA_BACKEND_BASE_URL.strip().rstrip('/')
+    if not base:
+        return ""
+    if "/tickets" in base:
+        return base
+    return f"{base}/api/v1/tickets/internal"
+
+INTERNAL_TICKETS_API_URL = _resolve_internal_tickets_url()
+INTERNAL_TICKETS_API_KEY = INTERNAL_BYPASS_TOKEN
+
 EXPOSE_DEBUG_METADATA = os.getenv("EXPOSE_DEBUG_METADATA", "false").lower() in ("1", "true", "yes")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "ministral-3:8b")
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")

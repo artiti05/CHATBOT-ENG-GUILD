@@ -11,13 +11,22 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
 import fitz  # PyMuPDF
 import numpy as np
 import pdfplumber
 import requests
-import chromadb
-from chromadb.config import Settings as ChromaSettings
+
+try:
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+except ImportError:
+    chromadb = None
+    ChromaSettings = None
 
 try:
     from bidi.algorithm import get_display

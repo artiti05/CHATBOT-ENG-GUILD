@@ -1,8 +1,12 @@
 import re
 import unicodedata
 from typing import Dict, Any, List, Optional
-import nltk
-from nltk.stem.isri import ISRIStemmer
+try:
+    import nltk
+    from nltk.stem.isri import ISRIStemmer
+except ImportError:
+    nltk = None
+    ISRIStemmer = None
 
 
 from src.pipeline.stage_01_understand.arat5_rewriter import AraT5DialectRewriter

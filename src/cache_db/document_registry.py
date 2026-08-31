@@ -12,7 +12,12 @@ class DocumentRegistry:
         self._init_db()
 
     def _get_connection(self):
-        return sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=20.0)
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA busy_timeout = 10000;")
+        conn.execute("PRAGMA cache_size = -32000;")
+        return conn
 
     def _init_db(self):
         with self._get_connection() as conn:
@@ -34,6 +39,7 @@ class DocumentRegistry:
                 cursor.execute("ALTER TABLE processed_documents ADD COLUMN parsed_md_path TEXT DEFAULT '';")
             except Exception:
                 pass
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processed_docs_status ON processed_documents(status);")
             conn.commit()
 
     def register_document(self, doc_dict: Dict[str, Any], file_path: Path, status: str = "active"):
@@ -129,11 +135,16 @@ class TicketRegistry:
                 "ALTER TABLE tickets ADD COLUMN priority TEXT DEFAULT 'medium';",
                 "ALTER TABLE tickets ADD COLUMN conversation_context TEXT DEFAULT '';",
                 "ALTER TABLE tickets ADD COLUMN user_id TEXT DEFAULT '';",
+                "ALTER TABLE tickets ADD COLUMN session_id TEXT DEFAULT '';",
+                "ALTER TABLE tickets ADD COLUMN external_ticket_id TEXT DEFAULT '';",
             ):
                 try:
                     cursor.execute(ddl)
                 except Exception:
                     pass
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_session_id ON tickets(session_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_ext_id ON tickets(external_ticket_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
             conn.commit()
 
     def create_ticket(
@@ -143,14 +154,16 @@ class TicketRegistry:
         history: List[Dict[str, str]],
         user: Dict[str, str],
         priority: str = "medium",
+        session_id: Optional[str] = None,
+        external_ticket_id: Optional[str] = None,
     ) -> int:
         title = query[:40] + ("..." if len(query) > 40 else "")
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO tickets
-                    (reason, issue_text, name, phone, engineer_number, status, title, priority, conversation_context, user_id)
-                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?);
+                    (reason, issue_text, name, phone, engineer_number, status, title, priority, conversation_context, user_id, session_id, external_ticket_id)
+                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?);
             """, (
                 reason,
                 query,
@@ -161,6 +174,8 @@ class TicketRegistry:
                 priority,
                 json.dumps(history, ensure_ascii=False),
                 user.get("user_id", ""),
+                session_id or "",
+                external_ticket_id or "",
             ))
             conn.commit()
             return cursor.lastrowid
