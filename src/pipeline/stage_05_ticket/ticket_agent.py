@@ -178,15 +178,13 @@ class TicketIntakeAgent:
         payload: Dict[str, Any] = {
             "title": title,
             "content": content,
-            "reason": reason,
             "ticketPriority": ticket_priority,
             "skipWorkingHoursCheck": True,
         }
 
         if session_id:
-            payload["session_id"] = session_id
-            if _UUID_RE.match(session_id.strip()):
-                payload["sessionId"] = session_id.strip()
+            payload["sessionId"] = session_id.strip()
+
 
         phone = (user or {}).get("phone") or (user or {}).get("userPhoneNumber") or (user or {}).get("user_phone_number")
         if phone:

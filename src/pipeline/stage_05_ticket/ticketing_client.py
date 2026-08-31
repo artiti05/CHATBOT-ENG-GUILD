@@ -11,19 +11,15 @@ from src.config import (
 
 logger = logging.getLogger(__name__)
 
-# Keywords identifying dedicated AI / Chatbot escalation categories
-AI_CATEGORY_KEYWORDS = [
-    "ai",
-    "chatbot",
-    "bot",
-    "ذكاء اصطناعي",
-    "المساعد الآلي",
-    "المساعد الذكي",
-    "شات بوت",
-    "شاتبوت",
-    "تصعيد ذكي",
-    "ai escalation",
+import re
+
+# Regex patterns identifying dedicated AI / Chatbot escalation categories with strict word boundaries
+AI_CATEGORY_PATTERNS = [
+    re.compile(r'\b(ai|chatbot|bot)\b', re.IGNORECASE),
+    re.compile(r'\bai\s*(assistant|support|escalation|desk)\b', re.IGNORECASE),
+    re.compile(r'(ذكاء\s*اصطناعي|مساعد\s*آلي|مساعد\s*ذكي|شات\s*بوت|شاتبوت|تصعيد\s*ذكي|دعم\s*آلي)'),
 ]
+
 
 # Mapping NLU intents to department category keywords
 INTENT_CATEGORY_KEYWORDS = {
@@ -149,12 +145,12 @@ class TicketingClient:
                 if self.override_category_name in en or self.override_category_name in ar:
                     return str(cat.get("id"))
 
-        # 3. AI Keyword Match
+        # 3. AI Regex Pattern Match with strict word boundaries
         for cat in categories:
-            en = str(cat.get("enName", "")).lower()
-            ar = str(cat.get("arName", "")).lower()
-            for kw in AI_CATEGORY_KEYWORDS:
-                if kw.lower() in en or kw in ar:
+            en = str(cat.get("enName", "")).strip()
+            ar = str(cat.get("arName", "")).strip()
+            for pattern in AI_CATEGORY_PATTERNS:
+                if pattern.search(en) or pattern.search(ar):
                     logger.info(
                         "[TicketingClient] Found designated AI category: '%s' / '%s' (ID: %s)",
                         cat.get("enName"),
@@ -164,6 +160,7 @@ class TicketingClient:
                     return str(cat.get("id"))
 
         return None
+
 
     def map_intent_to_category(
         self, intent: Optional[str], categories: List[Dict[str, Any]]
@@ -243,26 +240,26 @@ class TicketingClient:
         if prio_upper not in ["HIGH", "MEDIUM", "LOW"]:
             prio_upper = "MEDIUM"
 
+        final_content = content
+        if reason and "سبب التصعيد" not in final_content:
+            final_content = f"{final_content}\n\nسبب التصعيد: {reason}"
+
         payload: Dict[str, Any] = {
             "title": title[:100],
-            "content": content,
+            "content": final_content,
             "ticketPriority": prio_upper,
             "skipWorkingHoursCheck": True,
-            "source": "AI_CHATBOT",
         }
 
         if final_category_id:
             payload["serviceCategoryId"] = final_category_id
 
-        if reason:
-            payload["reason"] = reason
-
         if session_id:
             payload["sessionId"] = session_id.strip()
-            payload["session_id"] = session_id.strip()
 
         if phone:
             payload["userPhoneNumber"] = str(phone).strip()
+
 
         try:
             with httpx.Client(timeout=5.0) as client:

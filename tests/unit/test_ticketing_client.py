@@ -118,4 +118,20 @@ def test_create_ticket_with_ai_swap():
         assert sent_body["ticketPriority"] == "HIGH"
         assert sent_body["sessionId"] == "session-123"
         assert sent_body["userPhoneNumber"] == "0791234567"
-        assert sent_body["source"] == "AI_CHATBOT"
+        assert "source" not in sent_body
+        assert "reason" not in sent_body
+
+
+def test_affairs_not_misidentified_as_ai():
+    """Verify that words containing 'ai' like 'Affairs' or 'Training' are NOT misidentified as AI."""
+    client = TicketingClient()
+    categories = [
+        {"id": "cat-affairs", "enName": "Membership & Registration Affairs", "arName": "شؤون العضوية والتسجيل"},
+        {"id": "cat-training", "enName": "Training & Qualification", "arName": "التدريب والتأهيل"},
+        {"id": "cat-support", "enName": "Technical Support", "arName": "الدعم الفني"},
+    ]
+
+    # None of the above are AI categories
+    ai_cat = client.resolve_ai_category(categories)
+    assert ai_cat is None
+

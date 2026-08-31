@@ -92,8 +92,9 @@ def test_ticket_intake_agent_internal_api_success(temp_ticket_registry):
         assert "#9999" in message
         mock_post.assert_called_once()
         sent_payload = mock_post.call_args[1]["json"]
-        assert sent_payload["session_id"] == "sess-789"
-        assert sent_payload["reason"] == "user_intent"
+        assert sent_payload.get("sessionId") == "sess-789"
+        assert "سبب التصعيد: user_intent" in sent_payload["content"]
+
 
 @pytest.mark.asyncio
 async def test_rag_chatbot_answer_question_escalated_metadata():
