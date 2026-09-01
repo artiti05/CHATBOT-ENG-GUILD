@@ -1,0 +1,18 @@
+{
+  "trial_id": 11,
+  "params": {
+    "learning_rate": 0.0002,
+    "batch_size": 8,
+    "weight_decay": 0.001,
+    "warmup_ratio": 0.1,
+    "epochs": 4,
+    "label_smoothing": 0.0,
+    "grad_accum": 2
+  },
+  "train_loss": 7.88183,
+  "eval_loss": 1.58398,
+  "overfitting_gap": 0.0,
+  "penalized_score": 1.58398,
+  "duration_sec": 3140.54,
+  "checkpoint_dir": "araT5/tuning/trial_checkpoints/trial_11"
+}

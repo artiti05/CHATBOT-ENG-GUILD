@@ -313,7 +313,7 @@ def run_tuning(
             "overfitting_gap": round(overfitting_gap, 5),
             "penalized_score": round(penalized_score, 5),
             "duration_sec": round(train_duration, 2),
-            "checkpoint_dir": str(trial_output_dir),
+            "checkpoint_dir": str(trial_output_dir.relative_to(BASE_DIR)).replace("\\", "/"),
         }
         all_trials_records.append(trial_record)
 
@@ -358,7 +358,8 @@ def run_tuning(
         print(f"   - {k:<20}: {v}")
 
     # Export best model
-    best_trial_ckpt = Path(best_trial_info["checkpoint_dir"])
+    raw_ckpt_path = Path(best_trial_info["checkpoint_dir"])
+    best_trial_ckpt = raw_ckpt_path if raw_ckpt_path.is_absolute() else (BASE_DIR / raw_ckpt_path)
     if best_model_dir.exists():
         shutil.rmtree(best_model_dir)
     best_model_dir.mkdir(parents=True, exist_ok=True)
