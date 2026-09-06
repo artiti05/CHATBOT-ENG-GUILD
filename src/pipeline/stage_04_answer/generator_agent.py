@@ -1,11 +1,18 @@
-import json
 import re
-from typing import Any, Dict, Generator, List, Tuple
+from typing import Any, Dict, Generator, List, Tuple, Union
 
-import requests
+import openai
 
-from src.config import NUM_CTX, NUM_PREDICT, OLLAMA_CHAT_MODEL, OLLAMA_KEEP_ALIVE, OLLAMA_URL
+from src.config import (
+    OPENAI_API_KEY,
+    OPENAI_CHAT_MODEL,
+    OPENAI_MAX_TOKENS,
+    OPENAI_TEMPERATURE,
+)
 
+# ---------------------------------------------------------------------------
+# Reasoning-tag stripping helpers (unchanged — kept for model compatibility)
+# ---------------------------------------------------------------------------
 _THINK_OPEN_RE = re.compile(r'<\s*(think|thinking|reasoning)\s*>', re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r'</\s*(think|thinking|reasoning)\s*>', re.IGNORECASE)
 _THINK_PAIR_RE = re.compile(
@@ -82,15 +89,22 @@ def clean_formatting(text: str) -> str:
     cleaned = re.sub(r'\*+', '', cleaned)
     cleaned = re.sub(r'^#+\s*', '', cleaned, flags=re.MULTILINE)
     # Strip any inline source tags like [المصدر 1] or [Source 2]
-    cleaned = re.sub(r'\[\s*(المصدر|المصادر|Source|Sources)\s*[\d\.\, ]+\]', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\[\s*(المصدر|المصادر|Source|Sources)\s*[\d\.,\s]+\]', '', cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
 
 
-class ResponseGeneratorAgent:
-    def __init__(self, ollama_url: str = OLLAMA_URL, model: str = OLLAMA_CHAT_MODEL):
-        self.ollama_url = ollama_url
-        self.model = model
+# ---------------------------------------------------------------------------
+# ResponseGeneratorAgent
+# ---------------------------------------------------------------------------
 
+class ResponseGeneratorAgent:
+    def __init__(self, model: str = OPENAI_CHAT_MODEL):
+        self.model = model
+        self._client = openai.OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+    # ------------------------------------------------------------------
+    # Prompt builder — returns (prompt_str, included_sources)
+    # ------------------------------------------------------------------
     def build_prompt(self,
                      query: str,
                      standalone_query: str,
@@ -138,6 +152,7 @@ class ResponseGeneratorAgent:
 
         acc_lower = str(detected_accent).lower().strip()
         is_english = acc_lower in ("english", "en", "mixed") or acc_lower.startswith("en")
+
         if is_english:
             system_prompt = (
                 "You are an Eng-Guild information assistant for the Jordan Engineers Association (JEA).\n"
@@ -173,7 +188,7 @@ class ResponseGeneratorAgent:
                 f"3. الجمل القصيرة والكثافة العالية: اكتب في جمل قصيرة ومباشرة، وحافظ على جميع التفاصيل والمعلومات الدقيقة مع إلغاء الكلمات الزائدة الحشو.\n"
                 f"4. {lang_instruction}\n"
                 f"5. عدم كتابة أرقام المصادر: يُمنع إدراج أرقام المصادر بين الأقواس مثل [المصدر 1] أو [المصدر N] داخل جمل الإجابة. اكتب الإجابة بسلاسة واحترافية وبدون رموز المصادر.\n"
-                f"6. خلو من المظاهر الزائفة: يُحظر إضافة أي خاتمة روتينية أو جمل ترحيبية أو عرض مساعدة إضافية في النهاية (مثل 'تختص النقابة...' أو 'في حال وجود استفسارات').\n"
+                f"6. خلو من المظاهر الزائفة: يُحظر إضافة أي خاتمة روتينية أو جمل ترحيبية أو عرض مساعدة إضافية في النهاية.\n"
                 f"7. الدقة والاعتماد على المصادر: اجب اعتماداً على المعلومات الواردة في المصادر المرفقة بأعلاه، والخص كافة التفاصيل والخطوات والشروط المذكورة بدقة.\n"
             )
 
@@ -189,72 +204,94 @@ class ResponseGeneratorAgent:
 
         return full_prompt, included_sources
 
-    def generate(self, prompt: str) -> Tuple[str, bool]:
-        if not prompt:
+    def _to_messages(self, prompt: Union[str, List[Dict[str, str]]]) -> List[Dict[str, str]]:
+        """Converts raw prompt string or pre-built messages into OpenAI message list."""
+        if isinstance(prompt, list):
+            return prompt
+        if not isinstance(prompt, str) or not prompt.strip():
+            return []
+
+        parts = prompt.split("=" * 60)
+        if len(parts) >= 2:
+            system_part = parts[0].strip()
+            user_part = ("=" * 60).join(parts[1:]).strip()
+            return [
+                {"role": "system", "content": system_part},
+                {"role": "user", "content": user_part},
+            ]
+        return [{"role": "user", "content": prompt}]
+
+    # ------------------------------------------------------------------
+    # Non-streaming generation
+    # ------------------------------------------------------------------
+    def generate(self, prompt: Union[str, List[Dict[str, str]]]) -> Tuple[str, bool]:
+        messages = self._to_messages(prompt)
+        if not messages:
+            return "", False
+        if not self._client:
+            print("[OpenAI] Warning: OPENAI_API_KEY is not configured.")
             return "", False
 
-        models_to_try = [self.model, "qwen2.5:7b", "ministral-3:3b-instruct-2512-q4_K_M"]
-        for model_tag in models_to_try:
-            try:
-                payload = {
-                    "model": model_tag,
-                    "prompt": prompt,
-                    "stream": False,
-                    "think": False,
-                    "keep_alive": OLLAMA_KEEP_ALIVE,
-                    "options": {
-                        "temperature": 0.1,
-                        "num_predict": NUM_PREDICT,
-                        "num_ctx": NUM_CTX
-                    }
-                }
-                res = requests.post(self.ollama_url, json=payload, timeout=(3.0, 120.0))
-                if res.status_code == 200:
-                    content = res.json().get("response", "").strip()
-                    if content:
-                        return clean_formatting(content), True
-            except Exception:
-                continue
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=OPENAI_TEMPERATURE,
+                max_tokens=OPENAI_MAX_TOKENS,
+                stream=False,
+            )
+            content = response.choices[0].message.content or ""
+            content = content.strip()
+            if content:
+                return clean_formatting(content), True
+        except openai.AuthenticationError:
+            print("[OpenAI] Authentication failed — check OPENAI_API_KEY.")
+        except openai.RateLimitError:
+            print("[OpenAI] Rate limit exceeded.")
+        except openai.APIConnectionError as e:
+            print(f"[OpenAI] Connection error: {e}")
+        except Exception as e:
+            print(f"[OpenAI] Unexpected error: {e}")
 
         return "", False
 
-    def generate_stream(self, prompt: str) -> Generator[str, None, None]:
-        if not prompt:
+    # ------------------------------------------------------------------
+    # Streaming generation (token-by-token, for SSE endpoint)
+    # ------------------------------------------------------------------
+    def generate_stream(self, prompt: Union[str, List[Dict[str, str]]]) -> Generator[str, None, None]:
+        messages = self._to_messages(prompt)
+        if not messages or not self._client:
+            if not self._client:
+                print("[OpenAI] Warning: OPENAI_API_KEY is not configured.")
             return
 
-        models_to_try = [self.model, "qwen2.5:7b", "ministral-3:3b-instruct-2512-q4_K_M"]
-        for model_tag in models_to_try:
-            try:
-                payload = {
-                    "model": model_tag,
-                    "prompt": prompt,
-                    "stream": True,
-                    "think": False,
-                    "keep_alive": OLLAMA_KEEP_ALIVE,
-                    "options": {
-                        "temperature": 0.1,
-                        "num_predict": NUM_PREDICT,
-                        "num_ctx": NUM_CTX
-                    }
-                }
-                res = requests.post(self.ollama_url, json=payload, stream=True, timeout=(3.0, 120.0))
-                if res.status_code == 200:
-                    reasoning_filter = ReasoningStreamFilter()
-                    for line in res.iter_lines():
-                        if line:
-                            try:
-                                chunk_json = json.loads(line.decode('utf-8'))
-                                token = chunk_json.get("response", "")
-                                safe = reasoning_filter.feed(token)
-                                safe = safe.replace("*", "").replace("#", "")
-                                if safe:
-                                    yield safe
-                            except Exception:
-                                pass
-                    tail = reasoning_filter.flush()
-                    tail = tail.replace("*", "").replace("#", "")
-                    if tail:
-                        yield tail
-                    return
-            except Exception:
-                continue
+        try:
+            stream = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=OPENAI_TEMPERATURE,
+                max_tokens=OPENAI_MAX_TOKENS,
+                stream=True,
+            )
+            reasoning_filter = ReasoningStreamFilter()
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                token = delta.content or ""
+                if not token:
+                    continue
+                safe = reasoning_filter.feed(token)
+                safe = safe.replace("*", "").replace("#", "")
+                if safe:
+                    yield safe
+            tail = reasoning_filter.flush()
+            tail = tail.replace("*", "").replace("#", "")
+            if tail:
+                yield tail
+        except openai.AuthenticationError:
+            print("[OpenAI] Authentication failed — check OPENAI_API_KEY.")
+        except openai.RateLimitError:
+            print("[OpenAI] Rate limit exceeded.")
+        except openai.APIConnectionError as e:
+            print(f"[OpenAI] Connection error: {e}")
+        except Exception as e:
+            print(f"[OpenAI] Unexpected error: {e}")

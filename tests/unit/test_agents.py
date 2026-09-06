@@ -38,3 +38,40 @@ class TestResponseGeneratorAgent:
         assert len(prompt) > 0
         assert len(included) > 0
         assert "شروط-تسجيل-الاردنيين.md" in prompt or "شروط تسجيل المهندسين الأردنيين" in prompt
+
+    def test_generate_with_mocked_openai(self, monkeypatch):
+        class MockChoice:
+            message = type("Message", (), {"content": "Direct response text without fluff."})()
+
+        class MockResponse:
+            choices = [MockChoice()]
+
+        agent = ResponseGeneratorAgent()
+        agent._client = type("MockClient", (), {
+            "chat": type("MockChat", (), {
+                "completions": type("MockCompletions", (), {
+                    "create": staticmethod(lambda **kwargs: MockResponse())
+                })()
+            })()
+        })()
+
+        result, ok = agent.generate("What are the requirements?")
+        assert ok is True
+        assert result == "Direct response text without fluff."
+
+    def test_generate_stream_with_mocked_openai(self, monkeypatch):
+        class MockChunk:
+            def __init__(self, content):
+                self.choices = [type("Choice", (), {"delta": type("Delta", (), {"content": content})()})()]
+
+        agent = ResponseGeneratorAgent()
+        agent._client = type("MockClient", (), {
+            "chat": type("MockChat", (), {
+                "completions": type("MockCompletions", (), {
+                    "create": staticmethod(lambda **kwargs: [MockChunk("Hello "), MockChunk("Jordan "), MockChunk("Engineers")])
+                })()
+            })()
+        })()
+
+        tokens = list(agent.generate_stream("Test question"))
+        assert "".join(tokens) == "Hello Jordan Engineers"
