@@ -137,6 +137,8 @@ class TicketRegistry:
                 "ALTER TABLE tickets ADD COLUMN user_id TEXT DEFAULT '';",
                 "ALTER TABLE tickets ADD COLUMN session_id TEXT DEFAULT '';",
                 "ALTER TABLE tickets ADD COLUMN external_ticket_id TEXT DEFAULT '';",
+                "ALTER TABLE tickets ADD COLUMN department TEXT DEFAULT '';",
+                "ALTER TABLE tickets ADD COLUMN section TEXT DEFAULT '';",
             ):
                 try:
                     cursor.execute(ddl)
@@ -145,6 +147,7 @@ class TicketRegistry:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_session_id ON tickets(session_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_ext_id ON tickets(external_ticket_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_department ON tickets(department);")
             conn.commit()
 
     def create_ticket(
@@ -156,14 +159,16 @@ class TicketRegistry:
         priority: str = "medium",
         session_id: Optional[str] = None,
         external_ticket_id: Optional[str] = None,
+        department: str = "",
+        section: str = "",
     ) -> int:
         title = query[:40] + ("..." if len(query) > 40 else "")
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO tickets
-                    (reason, issue_text, name, phone, engineer_number, status, title, priority, conversation_context, user_id, session_id, external_ticket_id)
-                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?);
+                    (reason, issue_text, name, phone, engineer_number, status, title, priority, conversation_context, user_id, session_id, external_ticket_id, department, section)
+                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?);
             """, (
                 reason,
                 query,
@@ -176,18 +181,30 @@ class TicketRegistry:
                 user.get("user_id", ""),
                 session_id or "",
                 external_ticket_id or "",
+                department or "",
+                section or "",
             ))
             conn.commit()
             return cursor.lastrowid
 
-    def list_tickets(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_tickets(
+        self,
+        status: Optional[str] = None,
+        department: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+            query = "SELECT * FROM tickets WHERE 1=1"
+            params: List[Any] = []
             if status:
-                cursor.execute("SELECT * FROM tickets WHERE status = ? ORDER BY created_at DESC;", (status,))
-            else:
-                cursor.execute("SELECT * FROM tickets ORDER BY created_at DESC;")
+                query += " AND status = ?"
+                params.append(status)
+            if department:
+                query += " AND department = ?"
+                params.append(department)
+            query += " ORDER BY created_at DESC;"
+            cursor.execute(query, tuple(params))
             return [dict(r) for r in cursor.fetchall()]
 
     def get_ticket(self, ticket_id: int) -> Optional[Dict[str, Any]]:

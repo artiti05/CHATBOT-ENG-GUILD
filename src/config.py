@@ -103,16 +103,57 @@ CHILD_OVERLAP_TOKENS = 25       # Child overlap
 CHUNK_SIZE_TOKENS = CHILD_CHUNK_TOKENS  # Fallback backward-compatibility alias
 CHUNK_OVERLAP_TOKENS = CHILD_OVERLAP_TOKENS
 
+# LLM Provider Configuration ("openai", "vllm", "ollama")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
+
+# OpenAI Cloud API Settings
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
 # Multi-Stage Ingestion Pipeline & Ollama Settings
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
 
-# vLLM OpenAI-compatible chat endpoint. Replaces Ollama as the generation
-# backend for chat/rewrite/classification calls (~2.3x throughput). Ollama
-# settings above are retained: the vision/ingestion path still uses them.
-VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8001")
+# vLLM OpenAI-compatible chat endpoint
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8001").rstrip("/")
 VLLM_CHAT_URL = os.getenv("VLLM_CHAT_URL", f"{VLLM_BASE_URL}/v1/chat/completions")
 VLLM_CHAT_MODEL = os.getenv("VLLM_CHAT_MODEL", "jea-chat")   # must match --served-model-name
+
+def get_active_llm_config() -> dict:
+    """Resolves active LLM endpoint, model name, and auth headers based on LLM_PROVIDER."""
+    if LLM_PROVIDER == "openai":
+        headers = {"Content-Type": "application/json"}
+        if OPENAI_API_KEY:
+            headers["Authorization"] = f"Bearer {OPENAI_API_KEY}"
+        return {
+            "provider": "openai",
+            "chat_url": f"{OPENAI_BASE_URL}/chat/completions",
+            "model": OPENAI_MODEL,
+            "headers": headers,
+            "api_key": OPENAI_API_KEY,
+        }
+    elif LLM_PROVIDER == "ollama":
+        return {
+            "provider": "ollama",
+            "chat_url": f"{OLLAMA_BASE_URL}/v1/chat/completions",
+            "model": os.getenv("OLLAMA_CHAT_MODEL", "ministral-3:8b"),
+            "headers": {"Content-Type": "application/json"},
+            "api_key": "",
+        }
+    else:  # default to vllm
+        return {
+            "provider": "vllm",
+            "chat_url": VLLM_CHAT_URL,
+            "model": VLLM_CHAT_MODEL,
+            "headers": {"Content-Type": "application/json"},
+            "api_key": "",
+        }
+
+ACTIVE_LLM_CONFIG = get_active_llm_config()
+ACTIVE_CHAT_URL = ACTIVE_LLM_CONFIG["chat_url"]
+ACTIVE_CHAT_MODEL = ACTIVE_LLM_CONFIG["model"]
+ACTIVE_CHAT_HEADERS = ACTIVE_LLM_CONFIG["headers"]
 
 # Internal Backend Ticketing API settings (aligned with jea_backend /api/v1/tickets/internal)
 JEA_BACKEND_BASE_URL = os.getenv("JEA_BACKEND_URL", os.getenv("INTERNAL_TICKETS_API_URL", "http://localhost:3000"))
@@ -128,6 +169,12 @@ def _resolve_internal_tickets_url() -> str:
 
 INTERNAL_TICKETS_API_URL = _resolve_internal_tickets_url()
 INTERNAL_TICKETS_API_KEY = INTERNAL_BYPASS_TOKEN
+
+ENABLE_BLACK_MESSAGE_MODERATION = os.getenv("ENABLE_BLACK_MESSAGE_MODERATION", "true").lower() in ("1", "true", "yes")
+BLACK_MESSAGE_REFUSAL_MESSAGE = os.getenv(
+    "BLACK_MESSAGE_REFUSAL_MESSAGE",
+    "نعتذر منك، لا يمكن الاستمرار في معالجة هذه الرسالة لاحتوائها على محتوى مخالف لسياسة الاستخدام المقبولة لدى نقابة المهندسين الأردنيين."
+)
 
 EXPOSE_DEBUG_METADATA = os.getenv("EXPOSE_DEBUG_METADATA", "false").lower() in ("1", "true", "yes")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "ministral-3:8b")

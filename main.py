@@ -28,6 +28,7 @@ import os
 import socket
 import asyncio
 import argparse
+from typing import Optional
 from pathlib import Path
 
 # Force UTF-8 encoding on Windows console
@@ -64,21 +65,27 @@ def kill_port_owner(port: int = 8000):
             print(f"[Warning] Could not auto-free port {port}: {err}")
 
 
-def run_server(port: int = 8000):
-    """Launches the FastAPI Web Server and Arabic/Jordanian AI Chatbot UI on Port 8000."""
+def run_server(port: int = 8000, workers: Optional[int] = None):
+    """Launches the FastAPI Web Server with configurable multi-worker concurrency."""
     import uvicorn
 
     target_port = port
     if is_port_in_use(target_port):
         kill_port_owner(target_port)
 
+    num_workers = workers if workers is not None else int(os.getenv("WEB_WORKERS", os.getenv("WORKERS", "4")))
+
     print("\n" + "=" * 65)
     print(" 🚀 GUILD KNOWLEDGE BASE RAG WEB SERVER")
-    print(f"  - URL: http://localhost:{target_port}")
+    print(f"  - URL:     http://localhost:{target_port}")
+    print(f"  - Workers: {num_workers}")
     print("=" * 65 + "\n")
 
-    from src.api.main import app
-    uvicorn.run(app, host="0.0.0.0", port=target_port)
+    if num_workers > 1:
+        uvicorn.run("src.api.main:app", host="0.0.0.0", port=target_port, workers=num_workers)
+    else:
+        from src.api.main import app
+        uvicorn.run(app, host="0.0.0.0", port=target_port)
 
 
 def resolve_dir(dir_arg, config_default: Path) -> Path:
@@ -289,6 +296,7 @@ def main():
     # 1. Serve command
     serve_parser = subparsers.add_parser("serve", help="Launch FastAPI Web Chatbot UI (Default)")
     serve_parser.add_argument("--port", type=int, default=8000, help="Server port number (default: 8000)")
+    serve_parser.add_argument("--workers", "-w", type=int, default=None, help="Number of worker processes (default: from WEB_WORKERS or 4)")
 
     # 2. Ingest Knowledge Base (data/texts/ + data/markdowns/)
     ingest_kb_parser = subparsers.add_parser("ingest-kb", help="Ingest knowledge base from data/texts/ and data/markdowns/ (skips un-parsed pdfs/)")
@@ -337,7 +345,7 @@ def main():
     if args.command == "chat":
         run_terminal_chat(args)
     elif args.command == "serve":
-        run_server(port=args.port)
+        run_server(port=args.port, workers=args.workers)
     elif args.command == "ingest-kb":
         run_ingest_kb(args)
     elif args.command == "ingest-texts":

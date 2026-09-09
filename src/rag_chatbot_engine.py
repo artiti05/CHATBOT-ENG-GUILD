@@ -16,6 +16,7 @@ from src.pipeline.stage_04_answer.answer_router import AnswerRouter
 from src.pipeline.stage_04_answer.generator_agent import ResponseGeneratorAgent
 from src.pipeline.stage_02_retrieve.retriever_agent import RetrieverAgent
 from src.pipeline.stage_05_ticket.ticket_agent import TicketIntakeAgent
+from src.pipeline.stage_00_moderation.black_message_agent import BlackMessageAgent
 
 
 class RAGChatbotEngine:
@@ -26,6 +27,7 @@ class RAGChatbotEngine:
     """
 
     def __init__(self):
+        self.black_message_agent = BlackMessageAgent()
         self.nlp_pipeline = QueryPreprocessor()
         self.cache = SemanticCache()
         self.bm25 = BM25Retriever()
@@ -40,10 +42,46 @@ class RAGChatbotEngine:
     async def process_query(self, user_query: str,
                             history: Optional[List[Dict[str, str]]] = None,
                             user: Optional[Dict[str, str]] = None,
-                            session_id: Optional[str] = None) -> Dict[str, Any]:
+                            session_id: Optional[str] = None,
+                            message_id: Optional[str] = None) -> Dict[str, Any]:
         request_id = RequestTracer.generate_request_id()
         profiler = PipelineProfiler(request_id)
         hist = history or []
+
+        # 00. Moderation Stage — checks for abusive, toxic, or black messages
+        # Runs first to prevent policy-violating messages from reaching cache, tickets, or RAG.
+        with profiler.time_stage("moderation"):
+            is_black, black_reason, black_category = await self.black_message_agent.is_black_message_async(user_query, hist)
+            if is_black:
+                black_res = await self.black_message_agent.handle_black_message_async(
+                    query=user_query,
+                    message_id=message_id,
+                    session_id=session_id,
+                    reason=black_reason,
+                    category=black_category,
+                )
+                report = profiler.generate_report()
+                profiler.write_request_log(user_query, black_res["answer"], cache_hit=False, route="BLACK_MESSAGE")
+                return {
+                    "request_id": request_id,
+                    "query": {"original": user_query},
+                    "answer": black_res["answer"],
+                    "sources": [],
+                    "cache_hit": False,
+                    "is_black_message": True,
+                    "is_black": True,
+                    "black_reason": black_reason,
+                    "black_category": black_category,
+                    "route": {"route": "BLACK_MESSAGE", "reason": black_reason},
+                    "escalated": False,
+                    "is_escalated": False,
+                    "ticket_id": None,
+                    "escalation_reason": None,
+                    "session_id": session_id,
+                    "message_id": message_id,
+                    "profiling": report,
+                    "text_breakdown": profiler.format_text_breakdown()
+                }
 
         # 0. Ticket Intake Stage — runs before cache/retrieval since this
         # trigger needs neither. Identity comes from the caller (the backend
@@ -108,7 +146,7 @@ class RAGChatbotEngine:
 
         # 5. Intent Stage
         with profiler.time_stage("intent"):
-            intent_res = {"intents": query_obj["intent"], "confidence": query_obj["intent_confidence"]}
+            _ = {"intents": query_obj["intent"], "confidence": query_obj["intent_confidence"]}
 
         # 6-9. Dense Vector & Sparse Hybrid Retrieval Stage
         with profiler.time_stage("bm25"):

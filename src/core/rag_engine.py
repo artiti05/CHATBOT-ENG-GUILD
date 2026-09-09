@@ -6,9 +6,6 @@ from pathlib import Path
 
 import asyncio
 
-from src.rag_chatbot_engine import RAGChatbotEngine
-
-
 def clean_formatting(text: str) -> str:
     if not text:
         return ""
@@ -21,6 +18,7 @@ class RAGChatbot:
     """Wrapper around RAGChatbotEngine for API & CLI backward compatibility."""
 
     def __init__(self, provider: str = "ollama"):
+        from src.rag_chatbot_engine import RAGChatbotEngine
         self.engine = RAGChatbotEngine()
 
     @property
@@ -28,8 +26,9 @@ class RAGChatbot:
         return self.engine.cache
 
     async def answer_question(self, query: str, history: List[Dict[str, str]] = None, top_k: int = 15,
-                               user: Optional[Dict[str, str]] = None, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        res = await self.engine.process_query(query, history=history, user=user, session_id=session_id)
+                               user: Optional[Dict[str, str]] = None, session_id: Optional[str] = None,
+                               message_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        res = await self.engine.process_query(query, history=history, user=user, session_id=session_id, message_id=message_id)
         ans = res.get("answer", "")
         if isinstance(ans, (tuple, list)):
             ans = ans[0] if ans else ""
@@ -42,17 +41,38 @@ class RAGChatbot:
             "answer": ans,
             "sources": res.get("sources", [])[:top_k],
             "cache_hit": res.get("cache_hit", False),
+            "is_black_message": res.get("is_black_message", False),
+            "is_black": res.get("is_black", False),
+            "black_reason": res.get("black_reason"),
             "escalated": is_escalated,
             "is_escalated": is_escalated,
             "ticket_id": ticket_id,
             "escalation_reason": escalation_reason,
             "session_id": session_id,
+            "message_id": message_id,
             "metadata": res.get("profiling", {})
         }
 
     async def answer_question_stream(self, query: str, history: List[Dict[str, str]] = None, top_k: int = 15,
-                                      user: Optional[Dict[str, str]] = None, session_id: Optional[str] = None, **kwargs) -> AsyncGenerator[str, None]:
+                                      user: Optional[Dict[str, str]] = None, session_id: Optional[str] = None,
+                                      message_id: Optional[str] = None, **kwargs) -> AsyncGenerator[str, None]:
         hist = history or []
+
+        # NODE 00: Moderation check — flags black message and short-circuits
+        is_black, black_reason, black_cat = await self.engine.black_message_agent.is_black_message_async(query, hist)
+        if is_black:
+            black_res = await self.engine.black_message_agent.handle_black_message_async(
+                query=query,
+                message_id=message_id,
+                session_id=session_id,
+                reason=black_reason,
+                category=black_cat,
+            )
+            ans_text = black_res["answer"]
+            yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'cache_hit': False, 'is_black_message': True, 'is_black': True, 'black_reason': black_reason, 'escalated': False, 'is_escalated': False, 'ticket_id': None, 'session_id': session_id, 'message_id': message_id, 'profiling': {}}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'token': ans_text}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'answer': ans_text, 'is_black_message': True, 'is_black': True, 'black_reason': black_reason, 'escalated': False, 'is_escalated': False, 'ticket_id': None, 'session_id': session_id, 'message_id': message_id, 'text_breakdown': 'Black Message'}, ensure_ascii=False)}\n\n"
+            return
 
         # NODE 0: Ticket intake intercept (mirrors process_query) -- neither
         # trigger touches the knowledge base. Identity comes from the caller,
@@ -175,6 +195,7 @@ class RAGChatbot:
 class KnowledgeRetriever:
     """Knowledge retriever alias for API dependencies."""
     def __init__(self):
+        from src.rag_chatbot_engine import RAGChatbotEngine
         self.engine = RAGChatbotEngine()
 
     @property

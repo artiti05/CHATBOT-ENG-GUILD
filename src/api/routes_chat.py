@@ -37,6 +37,7 @@ class ChatRequest(BaseModel):
     top_k: int = Field(default=15, ge=1, le=50)
     user: Optional[UserContext] = None
     session_id: Optional[str] = Field(None, max_length=128)
+    message_id: Optional[str] = Field(None, max_length=128)
 
 class SearchRequest(BaseModel):
     query: str = Field(..., max_length=4000)
@@ -74,9 +75,17 @@ async def chat_with_kb(req: Optional[ChatRequest] = None, query: Optional[str] =
         hist_dicts = [{"role": h.role, "content": sanitize_user_input(h.content)} for h in req.history]
     user_dict = req.user.model_dump(exclude_none=True) if req and req.user else None
     session_id = req.session_id if req else None
+    message_id = req.message_id if req else None
 
     bot = get_chatbot()
-    response = await bot.answer_question(query=q, history=hist_dicts, top_k=k, user=user_dict, session_id=session_id)
+    response = await bot.answer_question(
+        query=q,
+        history=hist_dicts,
+        top_k=k,
+        user=user_dict,
+        session_id=session_id,
+        message_id=message_id,
+    )
     return response
 
 @router.api_route("/query", methods=["GET", "POST"], dependencies=[Depends(verify_authenticated_client)])
@@ -96,9 +105,17 @@ async def chat_with_kb_stream(req: Optional[ChatRequest] = None, query: Optional
         hist_dicts = [{"role": h.role, "content": sanitize_user_input(h.content)} for h in req.history]
     user_dict = req.user.model_dump(exclude_none=True) if req and req.user else None
     session_id = req.session_id if req else None
+    message_id = req.message_id if req else None
 
     bot = get_chatbot()
     return StreamingResponse(
-        bot.answer_question_stream(query=q, history=hist_dicts, top_k=k, user=user_dict, session_id=session_id),
+        bot.answer_question_stream(
+            query=q,
+            history=hist_dicts,
+            top_k=k,
+            user=user_dict,
+            session_id=session_id,
+            message_id=message_id,
+        ),
         media_type="text/event-stream"
     )

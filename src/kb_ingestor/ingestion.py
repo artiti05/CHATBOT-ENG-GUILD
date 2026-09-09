@@ -106,7 +106,9 @@ def clean_document_text(text: str) -> str:
     return cleaned.strip()
 
 
-def cv2_imread_unicode(path: Path, flags: int = cv2.IMREAD_COLOR) -> np.ndarray:
+def cv2_imread_unicode(path: Path, flags: int = 1) -> np.ndarray:
+    if cv2 is None:
+        raise ImportError("OpenCV (cv2) is required for image operations but is not installed.")
     img_array = np.fromfile(str(path), dtype=np.uint8)
     img = cv2.imdecode(img_array, flags)
     if img is None:

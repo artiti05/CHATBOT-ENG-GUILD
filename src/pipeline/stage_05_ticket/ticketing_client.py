@@ -41,6 +41,50 @@ INTENT_CATEGORY_KEYWORDS = {
 }
 
 
+DEFAULT_FALLBACK_SECTORS_STRUCTURE: Dict[str, Any] = {
+    "sectors": [
+        "دائرة التأمين الصحي",
+        "دائرة التقاعد والضمان الاجتماعي",
+        "دائرة الشؤون الهندسية والمكاتب",
+        "دائرة التدريب والتأهيل والمؤتمرات",
+        "الدائرة المالية",
+        "الدائرة الإدارية والموارد البشرية",
+        "دائرة تكنولوجيا المعلومات والتحول الرقمي",
+        "الدائرة القانونية",
+    ],
+    "departments": [
+        "دائرة التأمين الصحي",
+        "دائرة التقاعد والضمان الاجتماعي",
+        "دائرة الشؤون الهندسية والمكاتب",
+        "دائرة التدريب والتأهيل والمؤتمرات",
+        "الدائرة المالية",
+        "الدائرة الإدارية والموارد البشرية",
+        "دائرة تكنولوجيا المعلومات والتحول الرقمي",
+        "الدائرة القانونية",
+    ],
+    "sections": [
+        "قسم التأمين الصحي والمطالبات",
+        "قسم الرواتب التقاعدية",
+        "قسم تسجيل المكاتب والشركات الهندسية",
+        "قسم التصديق والشهادات الهندسية",
+        "قسم الدورات والتدريب المهني",
+        "قسم التحصيل والاشتراكات",
+        "قسم الشؤون القانونية والشكاوى",
+        "قسم الدعم الفني وتكنولوجيا المعلومات",
+    ],
+    "departmentSections": {
+        "دائرة التأمين الصحي": ["قسم التأمين الصحي والمطالبات", "قسم الموافقات الطبية"],
+        "دائرة التقاعد والضمان الاجتماعي": ["قسم الرواتب التقاعدية", "قسم القروض والتسهيلات"],
+        "دائرة الشؤون الهندسية والمكاتب": ["قسم تسجيل المكاتب والشركات الهندسية", "قسم التصديق والشهادات الهندسية"],
+        "دائرة التدريب والتأهيل والمؤتمرات": ["قسم الدورات والتدريب المهني", "قسم المؤتمرات والندوات"],
+        "الدائرة المالية": ["قسم التحصيل والاشتراكات", "قسم المحاسبة العامة"],
+        "الدائرة الإدارية والموارد البشرية": ["قسم شؤون الموظفين", "قسم المراسلات والديوان"],
+        "دائرة تكنولوجيا المعلومات والتحول الرقمي": ["قسم الدعم الفني وتكنولوجيا المعلومات", "قسم التطوير والنظم"],
+        "الدائرة القانونية": ["قسم الشؤون القانونية والشكاوى", "قسم التحكيم والنزاعات"],
+    },
+}
+
+
 class TicketingClient:
     """
     HTTP client for JEA Backend (NestJS) Internal Ticketing APIs.
@@ -67,8 +111,11 @@ class TicketingClient:
             "Accept": "application/json",
         }
         self.cache_ttl_seconds = cache_ttl_seconds
+        self.sectors_ttl_seconds = 86400  # 24 hours
         self._categories_cache: List[Dict[str, Any]] = []
         self._last_fetch_time: float = 0.0
+        self._sectors_cache: Dict[str, Any] = {}
+        self._last_sectors_fetch_time: float = 0.0
 
         # Optional manual overrides from environment
         self.override_category_id = os.getenv("AI_TICKET_CATEGORY_ID", "").strip()
@@ -116,6 +163,59 @@ class TicketingClient:
             logger.warning("[TicketingClient] Error connecting to backend to fetch categories: %s", e)
 
         return self._categories_cache or []
+
+    def fetch_sectors_structure(self, force_refresh: bool = False) -> Dict[str, Any]:
+        """
+        Fetch departments and sections hierarchy from jea_backend internal endpoint:
+        GET /api/v1/employees/internal/sectors
+        Caches result in-memory for TTL duration (default 24h).
+        Falls back to DEFAULT_FALLBACK_SECTORS_STRUCTURE if backend is unavailable.
+        """
+        now = time.time()
+        if (
+            not force_refresh
+            and self._sectors_cache
+            and (now - self._last_sectors_fetch_time < self.sectors_ttl_seconds)
+        ):
+            return self._sectors_cache
+
+        endpoints = [
+            f"{self.base_url}/api/v1/employees/internal/sectors",
+            f"{self.base_url}/employees/internal/sectors",
+        ]
+
+        for url in endpoints:
+            try:
+                with httpx.Client(timeout=4.0) as client:
+                    response = client.get(url, headers=self.headers)
+                    if response.status_code == 200:
+                        envelope = response.json()
+                        data = (
+                            envelope.get("data", envelope)
+                            if isinstance(envelope, dict) and "data" in envelope
+                            else envelope
+                        )
+                        if isinstance(data, dict) and ("departments" in data or "sectors" in data):
+                            self._sectors_cache = {
+                                "sectors": data.get("sectors") or data.get("departments", []),
+                                "departments": data.get("departments") or data.get("sectors", []),
+                                "sections": data.get("sections", []),
+                                "departmentSections": data.get("departmentSections", {}),
+                            }
+                            self._last_sectors_fetch_time = now
+                            logger.info(
+                                "[TicketingClient] Successfully fetched sectors structure: %d departments, %d sections",
+                                len(self._sectors_cache["departments"]),
+                                len(self._sectors_cache["sections"]),
+                            )
+                            return self._sectors_cache
+            except Exception as e:
+                logger.debug("[TicketingClient] Failed querying %s: %s", url, e)
+
+        logger.warning(
+            "[TicketingClient] Backend sectors endpoint unreachable; using built-in syndicate sectors fallback."
+        )
+        return self._sectors_cache or DEFAULT_FALLBACK_SECTORS_STRUCTURE
 
     def resolve_ai_category(self, categories: List[Dict[str, Any]]) -> Optional[str]:
         """
@@ -223,11 +323,13 @@ class TicketingClient:
         session_id: Optional[str] = None,
         phone: Optional[str] = None,
         reason: Optional[str] = None,
+        department: Optional[str] = None,
+        section: Optional[str] = None,
         force_ai_swap: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """
         Submits an escalation ticket to POST /api/v1/tickets/internal on jea_backend.
-        Automatically resolves and swaps the category for AI.
+        Automatically resolves and swaps the category for AI and attaches sector/department routing.
         """
         url = f"{self.base_url}/api/v1/tickets/internal"
 
@@ -259,6 +361,13 @@ class TicketingClient:
 
         if phone:
             payload["userPhoneNumber"] = str(phone).strip()
+
+        if department:
+            payload["department"] = department.strip()
+            payload["sector"] = department.strip()
+
+        if section:
+            payload["section"] = section.strip()
 
 
         try:

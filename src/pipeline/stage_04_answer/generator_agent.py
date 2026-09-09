@@ -7,7 +7,9 @@ import httpx
 from typing import Dict, Any, List, Tuple, Optional, AsyncGenerator
 
 from src.config import (
-    VLLM_CHAT_URL, VLLM_CHAT_MODEL, NUM_PREDICT, RELEVANCE_THRESHOLD
+    ACTIVE_CHAT_URL, ACTIVE_CHAT_MODEL, ACTIVE_CHAT_HEADERS,
+    LLM_PROVIDER, OPENAI_API_KEY, VLLM_CHAT_URL, VLLM_CHAT_MODEL,
+    NUM_PREDICT, RELEVANCE_THRESHOLD
 )
 
 logger = logging.getLogger(__name__)
@@ -92,9 +94,32 @@ def clean_formatting(text: str) -> str:
 
 
 class ResponseGeneratorAgent:
-    def __init__(self, vllm_url: str = VLLM_CHAT_URL, model: str = VLLM_CHAT_MODEL):
-        self.vllm_url = vllm_url
-        self.model = model
+    def __init__(
+        self,
+        chat_url: Optional[str] = None,
+        model: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+        provider: Optional[str] = None,
+        vllm_url: Optional[str] = None,  # backward compatibility alias
+    ):
+        self.chat_url = chat_url or vllm_url or ACTIVE_CHAT_URL
+        self.vllm_url = self.chat_url  # alias for backward compatibility
+        self.model = model or ACTIVE_CHAT_MODEL
+        self.headers = headers if headers is not None else ACTIVE_CHAT_HEADERS
+        self.provider = (provider or LLM_PROVIDER).lower()
+
+    def _build_payload(self, prompt: str, stream: bool = False) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": stream,
+            "temperature": 0.1,
+            "max_tokens": NUM_PREDICT,
+        }
+        # chat_template_kwargs is only supported by vLLM
+        if self.provider == "vllm":
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        return payload
 
     def build_prompt(self,
                      query: str,
@@ -187,74 +212,72 @@ class ResponseGeneratorAgent:
         return full_prompt, included_sources
 
     async def generate(self, prompt: str) -> Tuple[str, bool]:
-        """Batch generation against the vLLM OpenAI-compatible chat endpoint."""
+        """Batch generation against the active OpenAI/vLLM chat endpoint."""
         if not prompt:
             return "", False
 
         try:
-            payload = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "temperature": 0.1,
-                "max_tokens": NUM_PREDICT,
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=3.0)) as client:
-                res = await client.post(self.vllm_url, json=payload)
+            payload = self._build_payload(prompt, stream=False)
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
+                res = await client.post(self.chat_url, json=payload, headers=self.headers)
             if res.status_code == 200:
                 content = res.json()["choices"][0]["message"]["content"].strip()
                 if content:
                     return clean_formatting(content), True
+            elif res.status_code == 401:
+                logger.error("[GeneratorAgent] Authentication failed (HTTP 401). Check %s API key.", self.provider.upper())
+            elif res.status_code == 429:
+                logger.warning("[GeneratorAgent] Rate limit / quota exceeded (HTTP 429) from %s.", self.provider.upper())
             else:
-                logger.warning("[GeneratorAgent] vLLM returned %s: %s", res.status_code, res.text[:300])
+                logger.warning("[GeneratorAgent] %s returned %s: %s", self.provider.upper(), res.status_code, res.text[:300])
         except Exception:
-            logger.exception("[GeneratorAgent] generate() failed calling vLLM at %s", self.vllm_url)
+            logger.exception("[GeneratorAgent] generate() failed calling %s at %s", self.provider.upper(), self.chat_url)
 
         return "", False
 
     async def generate_stream(self, prompt: str) -> AsyncGenerator[str, None]:
-        """Yields real-time token chunks from the vLLM chat endpoint with stream=True."""
+        """Yields real-time token chunks from the active OpenAI/vLLM chat endpoint with stream=True."""
         if not prompt:
             return
 
         try:
-            payload = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": True,
-                "temperature": 0.1,
-                "max_tokens": NUM_PREDICT,
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=3.0)) as client:
-                async with client.stream("POST", self.vllm_url, json=payload) as res:
+            payload = self._build_payload(prompt, stream=True)
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
+                async with client.stream("POST", self.chat_url, json=payload, headers=self.headers) as res:
                     if res.status_code != 200:
                         body = await res.aread()
-                        logger.warning("[GeneratorAgent] vLLM stream returned %s: %s", res.status_code, body[:300])
+                        if res.status_code == 401:
+                            logger.error("[GeneratorAgent] Authentication failed (HTTP 401). Check %s API key.", self.provider.upper())
+                        elif res.status_code == 429:
+                            logger.warning("[GeneratorAgent] Rate limit / quota exceeded (HTTP 429) from %s.", self.provider.upper())
+                        else:
+                            logger.warning("[GeneratorAgent] %s stream returned %s: %s", self.provider.upper(), res.status_code, body[:300])
                         return
 
                     reasoning_filter = ReasoningStreamFilter()
                     async for line in res.aiter_lines():
                         if not line or not line.startswith("data: "):
                             continue
-                        data = line[6:]
-                        if data.strip() == "[DONE]":
+                        data = line[6:].strip()
+                        if data == "[DONE]":
                             break
                         try:
                             chunk_json = json.loads(data)
-                            delta = chunk_json["choices"][0].get("delta", {})
+                            choices = chunk_json.get("choices", [])
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta", {})
                             token = delta.get("content") or ""
                             safe = reasoning_filter.feed(token)
                             safe = safe.replace("*", "").replace("#", "")
                             if safe:
                                 yield safe
                         except Exception:
-                            logger.exception("[GeneratorAgent] Failed to parse vLLM stream chunk: %r", data[:300])
+                            logger.exception("[GeneratorAgent] Failed to parse %s stream chunk: %r", self.provider.upper(), data[:300])
 
                     tail = reasoning_filter.flush()
                     tail = tail.replace("*", "").replace("#", "")
                     if tail:
                         yield tail
         except Exception:
-            logger.exception("[GeneratorAgent] generate_stream() failed calling vLLM at %s", self.vllm_url)
+            logger.exception("[GeneratorAgent] generate_stream() failed calling %s at %s", self.provider.upper(), self.chat_url)
