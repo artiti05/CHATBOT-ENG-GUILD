@@ -153,3 +153,9 @@ multiple sub-columns below it (colspan). Do not flatten these into a single row 
 Keep the header hierarchy explicit using colspan, and keep column order as it visually
 appears on the page (rightmost visual column = first <td> in each row, since this is RTL).
 """
+
+# ─── JEA Backend Integration & Ticketing Configuration ───
+JEA_BACKEND_URL = os.getenv("JEA_BACKEND_URL", "http://localhost:3000").rstrip("/")
+INTERNAL_BYPASS_TOKEN = os.getenv("INTERNAL_BYPASS_TOKEN", "jea_rag_token")
+TICKETING_ENABLED = os.getenv("TICKETING_ENABLED", "true").lower() in ("1", "true", "yes")
+TICKETING_TIMEOUT_SEC = int(os.getenv("TICKETING_TIMEOUT_SEC", "10"))
