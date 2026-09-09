@@ -318,25 +318,16 @@ class TicketingClient:
         title: str,
         content: str,
         priority: str = "MEDIUM",
-        intent: Optional[str] = None,
-        category_id: Optional[str] = None,
         session_id: Optional[str] = None,
         phone: Optional[str] = None,
         reason: Optional[str] = None,
         department: Optional[str] = None,
         section: Optional[str] = None,
-        force_ai_swap: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """
         Submits an escalation ticket to POST /api/v1/tickets/internal on jea_backend.
-        Automatically resolves and swaps the category for AI and attaches sector/department routing.
         """
         url = f"{self.base_url}/api/v1/tickets/internal"
-
-        # Determine target category
-        final_category_id = category_id or self.get_target_category_id(
-            intent=intent, force_ai_swap=force_ai_swap
-        )
 
         prio_upper = priority.upper()
         if prio_upper not in ["HIGH", "MEDIUM", "LOW"]:
@@ -352,10 +343,6 @@ class TicketingClient:
             "ticketPriority": prio_upper,
             "skipWorkingHoursCheck": True,
         }
-
-        if final_category_id:
-            payload["serviceCategoryId"] = final_category_id
-
         if session_id:
             payload["sessionId"] = session_id.strip()
 
@@ -383,9 +370,8 @@ class TicketingClient:
                     if ticket_data:
                         ticket_id = ticket_data.get("id") or ticket_data.get("ticket_id")
                         logger.info(
-                            "[TicketingClient] Successfully created ticket in backend: ID=%s, category=%s",
+                            "[TicketingClient] Successfully created ticket in backend: ID=%s",
                             ticket_id,
-                            final_category_id,
                         )
                     return ticket_data
                 else:
