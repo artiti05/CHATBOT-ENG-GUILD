@@ -298,16 +298,6 @@ class TicketIntakeAgent:
         if phone:
             payload["userPhoneNumber"] = str(phone).strip()
 
-        # Dynamic category resolution: swap to designated AI category if present
-        try:
-            category_id = self.ticketing_client.get_target_category_id(
-                intent="escalation", force_ai_swap=True
-            )
-            if category_id:
-                payload["serviceCategoryId"] = category_id
-        except Exception as e:
-            logger.debug("[TicketAgent] Category resolution for AI swap failed: %s", e)
-
         try:
             client = self._get_http_client()
             res = client.post(self.internal_tickets_url, json=payload, headers=headers)

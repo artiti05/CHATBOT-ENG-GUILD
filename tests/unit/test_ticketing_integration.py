@@ -75,6 +75,8 @@ def test_ticket_intake_agent_internal_api_success(temp_ticket_registry):
         internal_tickets_key="mock-key"
     )
     agent.registry = temp_ticket_registry
+    # Department classification makes its own LLM POST; stub it so only the ticket POST is observed.
+    agent.classify_department = MagicMock(return_value=(None, None))
 
     mock_resp = MagicMock()
     mock_resp.status_code = 201
@@ -94,6 +96,7 @@ def test_ticket_intake_agent_internal_api_success(temp_ticket_registry):
         sent_payload = mock_post.call_args[1]["json"]
         assert sent_payload.get("sessionId") == "sess-789"
         assert "سبب التصعيد: user_intent" in sent_payload["content"]
+        assert "serviceCategoryId" not in sent_payload
 
 
 @pytest.mark.asyncio
