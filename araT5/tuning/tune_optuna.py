@@ -24,13 +24,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Prevent Intel OMP library duplication crash on Windows
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
 import optuna
-from optuna.trial import Trial
 import torch
 from datasets import Dataset
+from optuna.trial import Trial
 from transformers import (
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
@@ -40,6 +37,9 @@ from transformers import (
     Seq2SeqTrainingArguments,
     TrainerCallback,
 )
+
+# Prevent Intel OMP library duplication crash on Windows
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DATA_DIR = BASE_DIR / "araT5" / "data_msa"
@@ -81,7 +81,7 @@ class EpochMetricsLoggerCallback(TrainerCallback):
             eval_loss = metrics["eval_loss"]
             epoch = metrics.get("epoch", state.epoch if state else 0.0)
             train_loss = self.current_train_loss if self.current_train_loss is not None else float("nan")
-            
+
             gap = (eval_loss - train_loss) if (train_loss is not None and not (train_loss != train_loss)) else 0.0
             ratio = (eval_loss / train_loss) if (train_loss and train_loss > 0) else 1.0
 
@@ -287,7 +287,7 @@ def run_tuning(
 
         # Generalization gap and anti-overfitting penalization
         overfitting_gap = max(0.0, final_eval_loss - final_train_loss)
-        
+
         # Penalized objective: Min(eval_loss + alpha * max(0, eval_loss - train_loss))
         penalized_score = final_eval_loss + (overfitting_penalty * overfitting_gap)
 
@@ -353,7 +353,7 @@ def run_tuning(
     print(f"📉 Validation Loss      : {best_trial_info['eval_loss']}")
     print(f"📈 Training Loss        : {best_trial_info['train_loss']}")
     print(f"⚖️ Overfitting Gap (Δ) : {best_trial_info['overfitting_gap']}")
-    print(f"⚙️ Hyperparameters      :")
+    print("⚙️ Hyperparameters      :")
     for k, v in best_trial_info["params"].items():
         print(f"   - {k:<20}: {v}")
 

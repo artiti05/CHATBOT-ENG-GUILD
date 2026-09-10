@@ -12,6 +12,7 @@ from src.pipeline.stage_03_verify_rerank.confidence import DeterministicConfiden
 from src.pipeline.stage_03_verify_rerank.reranker import PriorityReranker
 from src.pipeline.stage_04_answer.answer_router import AnswerRouter
 from src.pipeline.stage_04_answer.generator_agent import ResponseGeneratorAgent
+from src.services.moderation_notifier import ModerationAlertDispatcher
 
 
 class RAGChatbotEngine:
@@ -49,6 +50,7 @@ class RAGChatbotEngine:
                     "answer": cached_res["answer"],
                     "sources": cached_res.get("sources", []),
                     "cache_hit": True,
+                    "moderation": {"flagged": False, "flag_type": "none"},
                     "profiling": report,
                     "text_breakdown": profiler.format_text_breakdown()
                 }
@@ -92,13 +94,13 @@ class RAGChatbotEngine:
             conf_res = self.confidence_eval.evaluate(reranked_cands, query_obj)
 
         # 12. Answer Routing & Synthesis Stage
+        sources_used = []
         with profiler.time_stage("answer"):
             route_res = self.router.route(query_obj, conf_res)
             route = route_res["route"]
 
             if route == "DETERMINISTIC":
                 answer_text = "يرجى زيارة بوابة نقابة المهندسين (jea.org.jo) للحصول على التفاصيل والخدمات الرسمية."
-
             else:
                 prompt_str, sources_used = self.generator.build_prompt(
                     query=user_query,
@@ -112,11 +114,32 @@ class RAGChatbotEngine:
                 else:
                     answer_text = "لم أتمكن من العثور على معلومات دقيقة."
 
-        # Cache final answer if valid (with session_id)
-        if answer_text:
-            self.cache.put(user_query, answer_text, reranked_cands[:3], query_vec=query_vec, session_id=session_id)
+        # Moderation check and cache safety
+        is_flagged = getattr(self.generator, "last_flag_detected", False)
+        if is_flagged:
+            moderation_info = {
+                "flagged": True,
+                "flag_type": "offensive_deescalated",
+            }
+            # Dispatch async webhook alert to external API endpoint
+            ModerationAlertDispatcher.dispatch(
+                request_id=request_id,
+                query=user_query,
+                flag_type="offensive_deescalated",
+                answer=answer_text,
+                language=query_obj.get("language", "ar"),
+                extra_metadata={"route": route, "sources_count": len(sources_used)}
+            )
+        else:
+            moderation_info = {
+                "flagged": False,
+                "flag_type": "none",
+            }
+            # Cache final answer ONLY if not flagged (prevents cache poisoning)
+            if answer_text:
+                self.cache.put(user_query, answer_text, reranked_cands[:3], query_vec=query_vec, session_id=session_id)
 
-        profiler.record_stage("answer", profiler.stage_latencies["answer"], {"route": route})
+        profiler.record_stage("answer", profiler.stage_latencies["answer"], {"route": route, "moderation_flagged": is_flagged})
         report = profiler.generate_report()
         diagnostics = DiagnosticAnalyzer.analyze_trace(report)
         profiler.write_request_log(user_query, answer_text, cache_hit=False, route=route)
@@ -128,8 +151,10 @@ class RAGChatbotEngine:
             "sources": reranked_cands[:5],
             "confidence": conf_res,
             "route": route_res,
+            "moderation": moderation_info,
             "cache_hit": False,
             "profiling": report,
             "diagnostics": diagnostics,
             "text_breakdown": profiler.format_text_breakdown()
         }
+

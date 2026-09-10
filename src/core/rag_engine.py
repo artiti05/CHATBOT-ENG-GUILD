@@ -3,7 +3,9 @@ import logging
 import re
 from typing import Any, Dict, Generator, List, Optional
 
+from src.monitoring.tracing import RequestTracer
 from src.rag_chatbot_engine import RAGChatbotEngine
+from src.services.moderation_notifier import ModerationAlertDispatcher
 
 logger = logging.getLogger("rag_engine")
 
@@ -11,23 +13,34 @@ logger = logging.getLogger("rag_engine")
 def clean_formatting(text: str) -> str:
     if not text:
         return ""
-    cleaned = re.sub(r'\*+', '', text)
-    cleaned = re.sub(r'^#+\s*', '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\*+", "", text)
+    cleaned = re.sub(r"^#+\s*", "", cleaned, flags=re.MULTILINE)
     return cleaned.strip()
 
 
 class KnowledgeRetriever:
-    """Backward compatibility wrapper around RetrieverAgent."""
+    """Knowledge retriever providing fast retrieval-only search without LLM generation overhead."""
 
     def __init__(self):
-        from src.pipeline.stage_02_retrieve.retriever_agent import RetrieverAgent
-        self.agent = RetrieverAgent()
-        self.collection = getattr(self.agent, "collection", None)
+        self.engine = RAGChatbotEngine()
 
-    def retrieve(self, query_text: str, top_k: int = 15) -> List[Dict[str, Any]]:
-        results = self.agent.retrieve_hybrid(query_text, top_k=top_k)
+    @property
+    def collection(self):
+        return getattr(self.engine.retriever, "collection", None)
+
+    def search(self, query: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
+        if not query or not query.strip():
+            return []
+        query_obj = self.engine.nlp_pipeline.process(query)
+        search_query = query_obj.get("canonical_msa") or query_obj.get("normalized_text")
+        fused_cands = self.engine.retriever.retrieve_hybrid(search_query, top_k=top_k * 2)
+        if hasattr(self.engine.reranker, "rerank"):
+            reranked_cands = self.engine.reranker.rerank(search_query, fused_cands)
+        else:
+            reranked_cands = self.engine.reranker.apply_priority_boost(fused_cands)
+
         normalized = []
-        for r in results:
+        for r in reranked_cands[:top_k]:
             if isinstance(r, dict):
                 normalized.append({
                     "title": r.get("source_id") or r.get("title") or r.get("document", "وثيقة نقابية"),
@@ -38,6 +51,10 @@ class KnowledgeRetriever:
             else:
                 normalized.append({"text": str(r), "title": "وثيقة نقابية"})
         return normalized
+
+    def retrieve(self, query_text: str = "", query: str = "", top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
+        q = query_text or query
+        return self.search(q, top_k=top_k)
 
 
 class RAGChatbot:
@@ -129,6 +146,7 @@ class RAGChatbot:
             "cache_hit": res.get("cache_hit", False),
             "escalated": escalated,
             "ticket_id": ticket_id,
+            "moderation": res.get("moderation", {"flagged": False, "flag_type": "none"}),
             "metadata": res.get("profiling", {}),
         }
 
@@ -141,6 +159,7 @@ class RAGChatbot:
         user: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Generator[str, None, None]:
+        request_id = RequestTracer.generate_request_id()
         cached_res = self.engine.cache.get(query, session_id=session_id)
         if cached_res:
             ans = cached_res.get("answer", "")
@@ -149,8 +168,10 @@ class RAGChatbot:
             meta_payload = json.dumps(
                 {
                     "type": "meta",
+                    "request_id": request_id,
                     "sources": cached_res.get("sources", [])[:top_k],
                     "cache_hit": True,
+                    "moderation": {"flagged": False, "flag_type": "none"},
                     "profiling": {},
                 },
                 ensure_ascii=False,
@@ -165,6 +186,7 @@ class RAGChatbot:
                 {
                     "type": "done",
                     "answer": ans,
+                    "moderation": {"flagged": False, "flag_type": "none"},
                     "text_breakdown": "Cache Hit",
                 },
                 ensure_ascii=False,
@@ -199,6 +221,7 @@ class RAGChatbot:
         meta_payload = json.dumps(
             {
                 "type": "meta",
+                "request_id": request_id,
                 "sources": normalized_sources,
                 "cache_hit": False,
                 "profiling": {},
@@ -208,6 +231,7 @@ class RAGChatbot:
         yield f"data: {meta_payload}\n\n"
 
         full_answer = ""
+        sources_used = []
         if route == "DETERMINISTIC":
             full_answer = "يرجى زيارة بوابة نقابة المهندسين (jea.org.jo) للحصول على التفاصيل والخدمات الرسمية."
             for char in full_answer:
@@ -237,10 +261,28 @@ class RAGChatbot:
         if not full_answer:
             full_answer = "لم أتمكن من العثور على معلومات دقيقة."
 
+        is_flagged = getattr(self.engine.generator, "last_flag_detected", False)
+        if is_flagged:
+            ModerationAlertDispatcher.dispatch(
+                request_id=request_id,
+                query=query,
+                flag_type="offensive_deescalated",
+                answer=full_answer,
+                language=query_obj.get("language", "ar"),
+                extra_metadata={"route": route, "sources_count": len(sources_used)},
+            )
+        else:
+            if full_answer:
+                self.engine.cache.put(query, full_answer, reranked_cands[:3], session_id=session_id)
+
         done_payload = json.dumps(
             {
                 "type": "done",
                 "answer": full_answer,
+                "moderation": {
+                    "flagged": is_flagged,
+                    "flag_type": "offensive_deescalated" if is_flagged else "none",
+                },
                 "text_breakdown": "Generated Answer",
             },
             ensure_ascii=False,

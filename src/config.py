@@ -41,6 +41,12 @@ CACHE_PERSIST_PATH = STORAGE_DIR / "semantic_cache.json"
 CACHE_SIMILARITY_THRESHOLD = 0.90
 CACHE_MAX_ENTRIES = 1000
 
+# Moderation & Outbound Alert Webhook Settings
+ENABLE_MODERATION_ALERTS = os.getenv("ENABLE_MODERATION_ALERTS", "true").lower() in ("1", "true", "yes")
+MODERATION_WEBHOOK_URL = os.getenv("MODERATION_WEBHOOK_URL", "")
+MODERATION_WEBHOOK_TOKEN = os.getenv("MODERATION_WEBHOOK_TOKEN", "")
+MODERATION_WEBHOOK_TIMEOUT = float(os.getenv("MODERATION_WEBHOOK_TIMEOUT", "3.0"))
+
 # Ensure storage directories exist
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
